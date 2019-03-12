@@ -46,7 +46,7 @@ class BaseNet(object):
                     setattr(x, v.name.split('/')[-1].split(':')[0],v)
                 self.append(name,x)
             return self
-
+        return w
     layer = staticmethod(layer)
 
     def __getitem__(self, item):
@@ -64,19 +64,25 @@ class BaseNet(object):
         for l in self._layers)
 
     __repr__ = __str__
-    def __len__(self):return len(self._layers)
-    def __iter__(self):return iter(self._layers)
+    def __len__(self):
+        return len(self._layers)
+
+    def __iter__(self):
+        return iter(self._layers)
     #作用：方法变为属性
     @property
-    def kernels(self):return [l.kernel for l in self._layers if hasattr(l, 'kernel')]
+    def kernels(self):
+        return [l.kernel for l in self._layers if hasattr(l, 'kernel')]
     @property
-    def biases(self):return [l.biases for l in self._layers if hasattr(l,'biases')]
+    def biases(self):
+        return [l.biases for l in self._layers if hasattr(l,'biases')]
     @property
-    def variables(self):return tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,self._name)
+    def variables(self):
+        return tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,self._name)
     @property
     def total_params(self):
         #参数数目
-        return sum(reduce(lambda a, b: a * b, v.shape, 1) for v in self.variables)
+        return sum(reduce(lambda a, b: a*b, v.shape.as_list(), 1) for v in self.variables)
 
     @property
     def input(self):
