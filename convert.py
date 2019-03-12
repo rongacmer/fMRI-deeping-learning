@@ -24,5 +24,6 @@ for j,lists in enumerate(dir_list):
         #路径地址
         MRI_dir = train_dir if j < len(dir_list) * train_size else test_dir
         filename = os.path.join(MRI_dir,mode+str(count))
-        np.save(filename,img_data[cnt])
+        data = img_data[cnt].astype(np.float32)
+        np.save(filename,data)
         count += 1
