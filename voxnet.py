@@ -18,6 +18,7 @@ class VoxNet(BaseNet):
     def avg_pool3d(self, name, x, size=2, stride=2, padding='VALID'):
         return tf.layers.avg_pooling3d(x, size, stride, padding)
 
+
     @BaseNet.layer
     def fc(self, name, x, num_outputs, batch_norm=True, relu=True):
         with tf.variable_scope(name) as scope:
@@ -34,7 +35,7 @@ class VoxNet(BaseNet):
     def __init__(self, voxnet_type='all_conv'):
         self.training = tf.placeholder_with_default(False, shape=None)
         super(VoxNet, self).__init__('voxnet',
-                                     tf.placeholder(tf.float32, [None, 32, 32, 32, 1]))
+                                     tf.placeholder(tf.float32, [None, 61, 73, 61, 1]))
 
         if voxnet_type == 'original':
             self.conv3d('conv1', 32, 5, 2)
@@ -49,8 +50,9 @@ class VoxNet(BaseNet):
             self.conv3d('conv2', 64, 3, 1)
             self.conv3d('conv3', 128, 2, 2)
             self.conv3d('conv4', 128, 2, 2)
-            self.fc('fc1', 128)
-            self.fc('fc2', 40, batch_norm=False, relu=False)
+            self.avg_pool3d('gap',size=[61,73,61],stride=[61,73,61])
+            # self.fc('fc1', 128)
+            self.fc('fc2', 2, batch_norm=False, relu=False)
             self.softmax('softmax')
 
 
