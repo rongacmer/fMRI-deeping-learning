@@ -2,6 +2,9 @@ import nibabel as nib
 import os
 import random
 import numpy as np
+import tensorflow as tf
+from config import cfg
+from voxnet import VoxNet
 # filename = 'D:/fmri/raw_AD/GretnaFunNIfTI/006_S_4153/xbcNGSdswranrest.nii'
 # img = nib.load(filename)
 # img_data = img.get_fdata()
@@ -10,7 +13,7 @@ import numpy as np
 
 class fMRI_data(object):
 
-    def __init__(self, data_type=['AD','NC'],batch_size=None,varbass = False):
+    def __init__(self, data_type=['AD','NC'],batch_size=None,varbass = False,dir="/home/anzeng/rhb/fmri_data"):
         class MRI(object):
             def __init__(self, fi, label, category):
                 #fi:路径名,label:标签,category:类别
@@ -22,7 +25,7 @@ class fMRI_data(object):
             def mri(self):
                 # x = self._zf.read(self._fi)
                 # print(fi)
-                return np.load(self.fi)
+                return np.load(self._fi)
 
             @property
             def label(self):
@@ -41,10 +44,10 @@ class fMRI_data(object):
                 np.save(f, self.mri)
         ############初始化数据集信息######################
         self._batch_size = batch_size
+        self._varbass = varbass
         self._mode = 'train'
-        self._train_size = 0.8 #训练集大小
         self._data_type=data_type
-        self._dir = ""  #地址索引
+        self._dir = dir  #地址索引
         self._iters = {}
         self._data = {'train': [], 'test': []}
         ###################################################
@@ -56,16 +59,18 @@ class fMRI_data(object):
                     yield i
         print('Setting up ' +str(self._data_type)+'database... ')
 
-        for classification in self._date_type:
-            now_dir = os.join(self._dir,now_dir)
+        #加载数据，模型:标签，文件路径
+        for classification in self._data_type:
+            now_dir = os.path.join(self._dir,classification)
             for mode in ['train','test']:
-                now_dir = os.join(now_dir,mode)
-                for i in os.listdir(now_dir):
-                    l = i.split('/')
-                    category = l[classification]
+                now_dir_x = os.path.join(now_dir,mode)
+                for i in os.listdir(now_dir_x):
+                    category = classification
                     train_or_test=mode
-                    self._data[train_or_test].append((category,i))
+                    filename = os.path.join(now_dir_x,i)
+                    self._data[train_or_test].append((category,filename))
 
+        #标签制作
         categories = sorted(list(set(c for c, i in self._data['test'])))
         categories = dict(zip(categories, range(len(categories))))
 
@@ -79,7 +84,7 @@ class fMRI_data(object):
 
     @property
     def num_categories(self):
-        return len(self._date_type)
+        return len(self.categories)
 
     @property
     def train(self):
@@ -109,7 +114,7 @@ class fMRI_data(object):
         for bi in range(bs):
             index = next_int()
             v = data[index]
-            d = v.voxels.reshape([61, 73, 61, 1])
+            d = v.mri.reshape([61, 73, 61, 1])
             for axis in 0, 1, 2:
                 if rn(0, 1):
                     d = np.flip(d, axis)
@@ -119,5 +124,45 @@ class fMRI_data(object):
             one_hots[bi][v.label] = 1
         return voxs, one_hots
 
+    #fmri经过voxnet获取时间序列
+    def get_time_batch(self,time_dim=40,batch_size=None):
+        #voxnet模型设置
+        voxnet=VoxNet()
+        p=dict()
+        p['output'] = voxnet['fc_1']
+        p['output'] = tf.reshape(p['output'],[None,128])
+        rn = random.randint
+        #批次大小
+        bs = batch_size if batch_size is not None else self._batch_size
+        bs = bs if bs is not None else 4
+        time_serial = np.zeros([bs,time_dim,128],dtype=np.float32)
+        one_hots = np.zeros([bs,self.num_categories],dtype=np.float32)
+        data = self._data[self._mode]
+        next_int = self._iters[self._mode].__next__
+        with tf.Session() as sess:
+            sess.run(tf.global_variables_initializer())
+            sess.run(voxnet.npz_saver.restore(sess,cfg.voxnet_checkpoint_dir))
+            for bi in range(bs):
+                index = next_int()
+                v = data[index]
+                #加载图片
+                img = nib.load(v._fi)
+                img_data = img.get_fdata()
+                img_data = np.transpose(img_data, [3, 0, 1, 2])
+                #时间点选择
+                time_stamp = np.linspace(0,img_data.shape[0],time_dim)
+                time_stamp = list(map(lambda x:int(x),time_stamp))
+                time_stamp_img = img_data[time_stamp]
+                #获取特征
+                time_feature = sess.run(p['output'],feed_dict={voxnet[0]:time_stamp_img})
+                time_serial[bi] = time_feature
+                one_hots[bi][v.label] = 1
+                if self._varbass:
+                    print(time_feature.shape)
+        return time_serial,one_hots
+
+
 if __name__ == '__main__':
     data = fMRI_data(['AD','NC'],varbass=True)
+    voxs,one_hots =data.get_batch(5)
+    print(voxs.shape)

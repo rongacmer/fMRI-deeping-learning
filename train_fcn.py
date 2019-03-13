@@ -1,23 +1,24 @@
 import math, datetime, os
-from voxnet import *
+from FCN import *
 from fmri_data import fMRI_data
 from config import cfg
+
+
 def main(*argv):
+    fr = open(cfg.output, 'w')
+    dataset = fMRI_data(['AD', 'NC'])
+    FCNs = Classifier_FCN()
 
-    fr = open(cfg.output,'w')
-    dataset = fMRI_data(['AD','NC'])
-    voxnet = VoxNet()
-
-    #创建数据
+    # 创建数据
     p = dict()  # placeholders
 
     p['labels'] = tf.placeholder(tf.float32, [None, 2])
 
-    p['loss'] = tf.nn.softmax_cross_entropy_with_logits(logits=voxnet[-2], labels=p['labels'])
+    p['loss'] = tf.nn.softmax_cross_entropy_with_logits(logits=FCNs[-2], labels=p['labels'])
     p['loss'] = tf.reduce_mean(p['loss'])
-    p['l2_loss'] = tf.add_n([tf.nn.l2_loss(w) for w in voxnet.kernels])
+    p['l2_loss'] = tf.add_n([tf.nn.l2_loss(w) for w in FCNs.kernels])
 
-    p['correct_prediction'] = tf.equal(tf.argmax(voxnet[-1], 1), tf.argmax(p['labels'], 1))
+    p['correct_prediction'] = tf.equal(tf.argmax(FCNs[-1], 1), tf.argmax(p['labels'], 1))
     p['accuracy'] = tf.reduce_mean(tf.cast(p['correct_prediction'], tf.float32))
 
     p['learning_rate'] = tf.placeholder(tf.float32)
@@ -38,19 +39,19 @@ def main(*argv):
     learning_decay = 10 * num_batches_per_epoch
     weights_decay_after = 5 * num_batches_per_epoch
 
-    checkpoint_num = 200
+    checkpoint_num = 0
     learning_step = 0
     min_loss = 1e308
 
-    if not os.path.isdir('checkpoints'):
-        os.mkdir('checkpoints')
+    if not os.path.isdir('checkpoints_fcns'):
+        os.mkdir('checkpoints_fcns')
 
-    with open('checkpoints/accuracies.txt', 'w') as f:
+    with open('checkpoints_fcns/accuracies.txt', 'w') as f:
         f.write('')
 
     with tf.Session() as session:
         session.run(tf.global_variables_initializer())
-        voxnet.npz_saver.restore(session,cfg.checkpoint_dir)
+        # voxnet.npz_saver.restore(session, cfg.checkpoint_dir)
         for batch_index in range(num_batches):
 
             learning_rate = max(min_learning_rate,
@@ -60,9 +61,9 @@ def main(*argv):
             if batch_index > weights_decay_after and batch_index % 256 == 0:
                 session.run(p['weights_decay'], feed_dict=feed_dict)
 
-            voxs, labels = dataset.train.get_batch(batch_size)
-            feed_dict = {voxnet[0]: voxs, p['labels']: labels,
-                         p['learning_rate']: learning_rate, voxnet.training: True}
+            voxs, labels = dataset.train.get_time_batch(batch_size)
+            feed_dict = {FCNs[0]: voxs, p['labels']: labels,
+                         p['learning_rate']: learning_rate, FCNs.training: True}
 
             session.run(p['train'], feed_dict=feed_dict)
 
@@ -73,7 +74,7 @@ def main(*argv):
                 fr.write("{} batch: {}".format(datetime.datetime.now(), batch_index))
                 fr.write('learning rate: {}'.format(learning_rate))
 
-                feed_dict[voxnet.training] = False
+                feed_dict[FCNs.training] = False
                 loss = session.run(p['loss'], feed_dict=feed_dict)
                 print('loss: {}'.format(loss))
                 fr.write('loss: {}'.format(loss))
@@ -86,31 +87,31 @@ def main(*argv):
                 min_loss = min(loss, min_loss)
 
             if batch_index and batch_index % 2048 == 0:
-                num_accuracy_batches = 30
+                num_accuracy_batches = 10
                 total_accuracy = 0
                 for x in range(num_accuracy_batches):
-                    voxs, labels = dataset.train.get_batch(batch_size)
-                    feed_dict = {voxnet[0]: voxs, p['labels']: labels, voxnet.training: False}
+                    voxs, labels = dataset.train.get_time_batch(batch_size)
+                    feed_dict = {FCNs[0]: voxs, p['labels']: labels, FCNs.training: False}
                     total_accuracy += session.run(p['accuracy'], feed_dict=feed_dict)
                 training_accuracy = total_accuracy / num_accuracy_batches
                 print('training accuracy: {}'.format(training_accuracy))
                 fr.write('training accuracy: {}'.format(training_accuracy))
-                num_accuracy_batches = 90
+                num_accuracy_batches = 10
                 total_accuracy = 0
                 for x in range(num_accuracy_batches):
-                    voxs, labels = dataset.test.get_batch(batch_size)
-                    feed_dict = {voxnet[0]: voxs, p['labels']: labels, voxnet.training: False}
+                    voxs, labels = dataset.test.get_time_batch(batch_size)
+                    feed_dict = {FCNs[0]: voxs, p['labels']: labels, FCNs.training: False}
                     total_accuracy += session.run(p['accuracy'], feed_dict=feed_dict)
                 test_accuracy = total_accuracy / num_accuracy_batches
                 print('test accuracy: {}'.format(test_accuracy))
                 fr.write('test accuracy: {}'.format(test_accuracy))
                 print('saving checkpoint {}...'.format(checkpoint_num))
-                voxnet.npz_saver.save(session, 'checkpoints/c-{}.npz'.format(checkpoint_num))
-                with open('checkpoints/accuracies.txt', 'a') as f:
+                FCNs.npz_saver.save(session, 'checkpoints_fcns/c-{}.npz'.format(checkpoint_num))
+                with open('checkpoints_fcns/accuracies.txt', 'a') as f:
                     f.write(' '.join(map(str, (checkpoint_num, training_accuracy, test_accuracy))) + '\n')
                 print('checkpoint saved!')
-
                 checkpoint_num += 1
+
 
 if __name__ == '__main__':
     tf.app.run()
