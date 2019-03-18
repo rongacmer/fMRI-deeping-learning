@@ -30,7 +30,7 @@ class BaseNet(object):
         self._layers.append(x)
         return self
 
-    #静态方法
+    #装饰器，创建模型
     def layer(func):
         def w(self, name,x='',*args,**kwargs):
             with tf.variable_scope(self._name):
@@ -42,6 +42,7 @@ class BaseNet(object):
                     #######?#########
                     x, args = self[''],(x,)+args
                 x = func(self,name,x,*args,**kwargs)
+                print(x.name)
                 for v in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, self._name+'/'+name):
                     setattr(x, v.name.split('/')[-1].split(':')[0],v)
                 self.append(name,x)
@@ -57,7 +58,13 @@ class BaseNet(object):
                 return l
         return self.output
 
-    def __str__(self):return '\n'.join(
+    def __str__(self):
+        for v in self.variables:
+            print(v)
+        t_vars = tf.trainable_variables()
+        g_list = tf.global_variables()
+        bn_moving_vars = [g for g in g_list if 'moving_mean' in g.name]
+        return '\n'.join(
         l.layer_name + '  ' + str(l.shape.as_list()) + ''.join(
             '\n    ' + v.name + '  ' + str(v.shape.as_list())
             for v in self.variables if l.layer_name in v.name.split('/'))
@@ -79,6 +86,7 @@ class BaseNet(object):
     @property
     def variables(self):
         return tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,self._name)
+
     @property
     def total_params(self):
         #参数数目
@@ -97,6 +105,7 @@ class BaseNet(object):
     @property
     def saver(self):
         return tf.train.Saver(self.variables)
+
 
     @property
     def npz_saver(self):

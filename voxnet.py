@@ -32,10 +32,10 @@ class VoxNet(BaseNet):
     def softmax(self, name, x):
         return tf.nn.softmax(x)
 
-    def __init__(self, voxnet_type='all_conv'):
+    def __init__(self, voxnet_name='voxnet',voxnet_type='all_conv'):
         self.training = tf.placeholder_with_default(False, shape=None)
-        super(VoxNet, self).__init__('voxnet',
-                                     tf.placeholder(tf.float32, [None, 61, 73, 61, 1]))
+        super(VoxNet, self).__init__(voxnet_name,
+                                     tf.placeholder(tf.float32, [None, 61, 73, 61, 1],name=voxnet_name+'/input'))
 
         if voxnet_type == 'original':
             self.conv3d('conv1', 32, 5, 2)
@@ -58,13 +58,13 @@ class VoxNet(BaseNet):
             shape = self.output.shape
             shape_x = [shape[i] for i in range(1,4)]
             self.avg_pool3d('gap',size=shape_x,stride=shape_x)
-            self.fc('fc1', 128)
-            # self.fc('fc1',40, batch_norm=False, relu=False)
+            # self.fc('fc1', 128)
+            self.fc('fc1',40, batch_norm=False, relu=False)
             self.fc('fc3', 2, batch_norm=False, relu=False)
             self.softmax('softmax')
 
 
 if __name__ == '__main__':
-    voxnet = VoxNet()
+    voxnet = VoxNet(voxnet_name='vx')
     print(voxnet)
     print('\nTotal number of parameters: {}'.format(voxnet.total_params))
