@@ -41,7 +41,7 @@ class Classifier_FCN(BaseNet):
 
         #FCNs模型构建############
         super(Classifier_FCN, self).__init__(fcn_name,
-                                     tf.placeholder(tf.float32, [None, 40,128],fcn_name+'/input'))
+                                     tf.placeholder(tf.float32, input_shape,fcn_name+'/input'))
         self.conv1d('conv1',num_filters=128,filter_size=8,stride=1)
         self.conv1d('conv2',num_filters=256,filter_size=5,stride=1)
         self.conv1d('conv3',num_filters=128,filter_size=3,stride=1)

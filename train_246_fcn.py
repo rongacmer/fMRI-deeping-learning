@@ -6,9 +6,30 @@ from config import cfg
 
 
 def main(*argv):
-    fr = open(cfg.output, 'w')
-    dataset = fMRI_data(['AD', 'NC'],varbass=False,dir="/home/anzeng/rhb/fmri_data")
-    FCNs = Classifier_FCN(input_shape=[None,40,246],nb_classes=2)
+    dataset = fMRI_data(['AD', 'NC'], varbass=False, dir="/home/anzeng/rhb/fmri_data/246_feature_data")
+
+    # 超参数设置
+
+    num_batches = 2147483647
+    batch_size = 32
+
+    initial_learning_rate = 0.001
+    min_learning_rate = 0.000001
+    learning_rate_decay_limit = 0.0001
+
+    num_batches_per_epoch = len(dataset.train) / float(batch_size)
+    learning_decay = 10 * num_batches_per_epoch
+    weights_decay_after = 5 * num_batches_per_epoch
+
+    time_dim = 40  # 挑选时间片个数
+    feature_index = [218]
+    checkpoint_num = 0
+    learning_step = 0
+    min_loss = 1e308
+
+    #模型框架
+
+    FCNs = Classifier_FCN(input_shape=[None,40,len(feature_index)],nb_classes=2)
 
     # 创建数据
     p = dict()  # placeholders
@@ -27,33 +48,17 @@ def main(*argv):
         p['train'] = tf.train.AdamOptimizer(p['learning_rate'], epsilon=1e-3).minimize(p['loss'])
     p['weights_decay'] = tf.train.GradientDescentOptimizer(p['learning_rate']).minimize(p['l2_loss'])
 
-    # p['test_error'] = tf.placeholder(tf.float32)
-    # 超参数设置
 
-    num_batches = 2147483647
-    batch_size = 8
 
-    initial_learning_rate = 0.001
-    min_learning_rate = 0.000001
-    learning_rate_decay_limit = 0.0001
 
-    num_batches_per_epoch = len(dataset.train) / float(batch_size)
-    learning_decay = 10 * num_batches_per_epoch
-    weights_decay_after = 5 * num_batches_per_epoch
-
-    time_dim = 40 #挑选时间片个数
-    checkpoint_num = 0
-    learning_step = 0
-    min_loss = 1e308
-
-    mask = nib.load('/home/anzeng/fmri/fMRI-deeping-learning/BN_Atlas_246_3mm.nii')
+    mask = nib.load('/home/anzeng/rhb/fmri/fMRI-deeping-learning/BN_Atlas_246_3mm.nii')
     mask = mask.get_fdata()
     accuracy_filename = os.path.join(cfg.checkpoint_dir, 'accuracies.txt')
     if not os.path.isdir(cfg.checkpoint_dir):
         os.mkdir(cfg.checkpoint_dir)
 
     with open(accuracy_filename, 'w') as f:
-        f.write('')
+        f.write(str(feature_index))
 
     with tf.Session() as session:
         session.run(tf.global_variables_initializer())
@@ -68,23 +73,20 @@ def main(*argv):
             if batch_index > weights_decay_after and batch_index % 256 == 0:
                 session.run(p['weights_decay'], feed_dict=feed_dict)
 
-            voxs, labels = dataset.train.get_246_batch(mask,batch_size=batch_size,time_dim=time_dim)
+            voxs, labels = dataset.train.get_246_batch(mask,batch_size=batch_size,time_dim=time_dim,feature_index=feature_index)
             feed_dict = {FCNs[0]: voxs, p['labels']: labels,
                          p['learning_rate']: learning_rate, FCNs.training: True}
 
             session.run(p['train'], feed_dict=feed_dict)
 
-            if batch_index and batch_index % 32 == 0:
+            if batch_index and batch_index % 64 == 0:
 
                 print("{} batch: {}".format(datetime.datetime.now(), batch_index))
                 print('learning rate: {}'.format(learning_rate))
-                fr.write("{} batch: {}".format(datetime.datetime.now(), batch_index))
-                fr.write('learning rate: {}'.format(learning_rate))
 
                 feed_dict[FCNs.training] = False
                 loss = session.run(p['loss'], feed_dict=feed_dict)
                 print('loss: {}'.format(loss))
-                fr.write('loss: {}'.format(loss))
 
                 if (batch_index and loss > 1.5 * min_loss and
                         learning_rate > learning_rate_decay_limit):
@@ -93,28 +95,26 @@ def main(*argv):
                     print("decreasing learning rate...")
                 min_loss = min(loss, min_loss)
 
-            if batch_index and batch_index % 16 == 0:
+            if batch_index and batch_index % 64 == 0:
                 num_accuracy_batches = 10
                 total_accuracy = 0
                 for x in range(num_accuracy_batches):
-                    voxs, labels = dataset.train.get_246_batch(mask, batch_size=batch_size, time_dim=time_dim)
+                    voxs, labels = dataset.train.get_246_batch(mask, batch_size=batch_size, time_dim=time_dim,feature_index=feature_index)
                     feed_dict = {FCNs[0]: voxs,p['labels']: labels, FCNs.training: False}
                     total_accuracy += session.run(p['accuracy'], feed_dict=feed_dict)
                 training_accuracy = total_accuracy / num_accuracy_batches
                 print('training accuracy: {}'.format(training_accuracy))
-                fr.write('training accuracy: {}'.format(training_accuracy))
                 num_accuracy_batches = 10
                 total_accuracy = 0
                 for x in range(num_accuracy_batches):
-                    voxs, labels = dataset.train.get_246_batch(mask, batch_size=batch_size, time_dim=time_dim)
+                    voxs, labels = dataset.test.get_246_batch(mask, batch_size=batch_size, time_dim=time_dim,feature_index=feature_index)
                     feed_dict = {FCNs[0]: voxs,p['labels']: labels, FCNs.training: False}
                     total_accuracy += session.run(p['accuracy'], feed_dict=feed_dict)
                 test_accuracy = total_accuracy / num_accuracy_batches
                 print('test accuracy: {}'.format(test_accuracy))
-                fr.write('test accuracy: {}'.format(test_accuracy))
                 with open(accuracy_filename, 'a') as f:
                     f.write(' '.join(map(str, (checkpoint_num, training_accuracy, test_accuracy))) + '\n')
-                if batch_index % 256 == 0:
+                if batch_index % 2048 == 0:
                     print('saving checkpoint {}...'.format(checkpoint_num))
                     filename = 'cx-{}.npz'.format(checkpoint_num)
                     filename = os.path.join(cfg.checkpoint_dir, filename)

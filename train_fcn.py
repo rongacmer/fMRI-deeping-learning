@@ -3,10 +3,11 @@ from FCN import *
 from voxnet import VoxNet
 from fmri_data import fMRI_data
 from config import cfg
+import time
 
 
 def main(*argv):
-    fr = open(cfg.output, 'w')
+    # fr = open(cfg.output, 'w')
     dataset = fMRI_data(['AD', 'NC'],varbass=False,dir="/home/anzeng/rhb/fmri_data")
     voxnet = VoxNet()
     FCNs = Classifier_FCN(input_shape=[None,40,128],nb_classes=2)
@@ -51,16 +52,17 @@ def main(*argv):
     if not os.path.isdir(cfg.checkpoint_dir):
         os.mkdir(cfg.checkpoint_dir)
 
-    with open(accuracy_filename, 'w') as f:
-        f.write('')
+    if not os.path.exists(accuracy_filename):
+        with open(accuracy_filename, 'w') as f:
+            f.write('')
 
     with tf.Session() as session:
         session.run(tf.global_variables_initializer())
-        voxnet.npz_saver.restore(session, cfg.voxnet_checkpoint_dir)
+        # voxnet.npz_saver.restore(session, cfg.voxnet_checkpoint_dir)
         #voxnet赋值
         voxnet_data = np.ones([1,61,73,61,1],np.float32)
         for batch_index in range(num_batches):
-
+            start = time.time()
             learning_rate = max(min_learning_rate,
                                 initial_learning_rate * 0.5 ** (learning_step / learning_decay))
             learning_step += 1
@@ -78,13 +80,12 @@ def main(*argv):
 
                 print("{} batch: {}".format(datetime.datetime.now(), batch_index))
                 print('learning rate: {}'.format(learning_rate))
-                fr.write("{} batch: {}".format(datetime.datetime.now(), batch_index))
-                fr.write('learning rate: {}'.format(learning_rate))
+                # fr.write("{} batch: {}".format(datetime.datetime.now(), batch_index))
+                # fr.write('learning rate: {}'.format(learning_rate))
 
                 feed_dict[FCNs.training] = False
                 loss = session.run(p['loss'], feed_dict=feed_dict)
                 print('loss: {}'.format(loss))
-                fr.write('loss: {}'.format(loss))
 
                 if (batch_index and loss > 1.5 * min_loss and
                         learning_rate > learning_rate_decay_limit):
@@ -102,7 +103,6 @@ def main(*argv):
                     total_accuracy += session.run(p['accuracy'], feed_dict=feed_dict)
                 training_accuracy = total_accuracy / num_accuracy_batches
                 print('training accuracy: {}'.format(training_accuracy))
-                fr.write('training accuracy: {}'.format(training_accuracy))
                 num_accuracy_batches = 10
                 total_accuracy = 0
                 for x in range(num_accuracy_batches):
@@ -111,7 +111,7 @@ def main(*argv):
                     total_accuracy += session.run(p['accuracy'], feed_dict=feed_dict)
                 test_accuracy = total_accuracy / num_accuracy_batches
                 print('test accuracy: {}'.format(test_accuracy))
-                fr.write('test accuracy: {}'.format(test_accuracy))
+                # fr.write('test accuracy: {}'.format(test_accuracy))
                 with open(accuracy_filename, 'a') as f:
                     f.write(' '.join(map(str, (checkpoint_num, training_accuracy, test_accuracy))) + '\n')
                 if batch_index % 256 == 0:
@@ -121,6 +121,8 @@ def main(*argv):
                     FCNs.npz_saver.save(session, filename)
                     print('checkpoint saved!')
                     checkpoint_num += 1
+            end = time.time()
+            print(time.time(),(end-start)/60)
 
 
 if __name__ == '__main__':

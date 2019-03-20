@@ -4,7 +4,6 @@ from fmri_data import fMRI_data
 from config import cfg
 def main(*argv):
 
-    fr = open(cfg.output,'w')
     dataset = fMRI_data(['EMCI','LMCI'],dir='/home/anzeng/rhb/fmri_data/MRI_data')
     voxnet = VoxNet()
 
@@ -72,13 +71,10 @@ def main(*argv):
 
                 print("{} batch: {}".format(datetime.datetime.now(), batch_index))
                 print('learning rate: {}'.format(learning_rate))
-                fr.write("{} batch: {}".format(datetime.datetime.now(), batch_index))
-                fr.write('learning rate: {}'.format(learning_rate))
 
                 feed_dict[voxnet.training] = False
                 loss = session.run(p['loss'], feed_dict=feed_dict)
                 print('loss: {}'.format(loss))
-                fr.write('loss: {}'.format(loss))
 
                 if (batch_index and loss > 1.5 * min_loss and
                         learning_rate > learning_rate_decay_limit):
@@ -96,7 +92,6 @@ def main(*argv):
                     total_accuracy += session.run(p['accuracy'], feed_dict=feed_dict)
                 training_accuracy = total_accuracy / num_accuracy_batches
                 print('training accuracy: {}'.format(training_accuracy))
-                fr.write('training accuracy: {}'.format(training_accuracy))
                 num_accuracy_batches = 90
                 total_accuracy = 0
                 for x in range(num_accuracy_batches):
@@ -105,7 +100,6 @@ def main(*argv):
                     total_accuracy += session.run(p['accuracy'], feed_dict=feed_dict)
                 test_accuracy = total_accuracy / num_accuracy_batches
                 print('test accuracy: {}'.format(test_accuracy))
-                fr.write('test accuracy: {}'.format(test_accuracy))
                 with open(accuracy_filename, 'a') as f:
                     f.write(' '.join(map(str, (checkpoint_num, training_accuracy, test_accuracy))) + '\n')
                 if batch_index % 2048 == 0:

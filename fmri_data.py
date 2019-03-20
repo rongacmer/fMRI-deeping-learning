@@ -3,6 +3,7 @@ import os
 import random
 import numpy as np
 import tensorflow as tf
+import time
 from config import cfg
 from voxnet import VoxNet
 # filename = 'D:/fmri/raw_AD/GretnaFunNIfTI/006_S_4153/xbcNGSdswranrest.nii'
@@ -161,11 +162,18 @@ class fMRI_data(object):
         return time_serial,one_hots
 
     #获取246数据
-    def get_246_batch(self,mask,batch_size = None,time_dim=40):
+    def get_246_batch(self,mask,batch_size = None,time_dim=40,feature_index = []):
+        #选取特征个数
+        if feature_index == []:
+            feature_len = 246
+            index = np.linspace(1,246,246)
+            feature_index = list(map(lambda x:int(x),index))
+        else:
+            feature_len = len(feature_index)
         #模板，时间维度
         bs = batch_size if batch_size is not None else self._batch_size
         bs = bs if bs is not None else 8
-        time_serial = np.zeros([bs, time_dim, 246], dtype=np.float32)
+        time_serial = np.zeros([bs, time_dim, feature_len], dtype=np.float32)
         one_hots = np.zeros([bs, self.num_categories], dtype=np.float32)
         data = self._data[self._mode]
         next_int = self._iters[self._mode].__next__
@@ -173,33 +181,27 @@ class fMRI_data(object):
             index = next_int()
             v = data[index]
             # 加载图片
-            img = nib.load(v._fi)
-            img_data = img.get_fdata()
-            img_data = np.transpose(img_data, [3, 0, 1, 2])
-            img_data = np.reshape(img_data, [-1, 61, 73, 61])
+            img_data = np.load(v._fi)
             img_data = img_data.astype(np.float32)
             # 时间点选择
             time_stamp = np.linspace(0, img_data.shape[0] - 1, time_dim)
             time_stamp = list(map(lambda x: int(x), time_stamp))
-            time_stamp_img = img_data[time_stamp]
-            # 获取特征
-            for i in range(246):
-                now_mask = mask.copy()
-                now_mask[np.where(now_mask != i + 1)] = 0
-                now_mask[np.where(now_mask == i + 1)] = 1
-                sum = np.sum(now_mask)
-                for index in range(time_stamp_img.shape[0]):
-                    voxs = np.sum(np.multiply(time_stamp_img[index],now_mask)) / sum
-                    time_serial[bi][index][i] = voxs
+            time_stamp = img_data[time_stamp]
+            time_serial[bi] = time_stamp[:,feature_index].copy()
+            one_hots[bi][v.label] = 1
+            print(time_serial[bi])
         return time_serial, one_hots
 
 
 def main(_):
+    start = time.time()
     dataset = fMRI_data(['AD', 'NC'], varbass=True, dir="D:/fmri/fmri_data")
     img = nib.load('BN_Atlas_246_3mm.nii')
     mask = img.get_fdata()
     time_serial,one_hots = dataset.train.get_246_batch(mask,batch_size=1,time_dim=40)
     print(time_serial)
+    end = time.time()
+    print((end-start)/60)
     #debug
     # cnt = [0 for i in range(246)]:
     # for i in range(246):
