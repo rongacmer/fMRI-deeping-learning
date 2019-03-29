@@ -4,11 +4,12 @@ from voxnet import VoxNet
 from fmri_data import fMRI_data
 from config import cfg
 import time
+from evaluation import *
 
 
 def main(*argv):
     # fr = open(cfg.output, 'w')
-    dataset = fMRI_data(['AD', 'NC'],varbass=False,dir="/home/anzeng/rhb/fmri_data")
+    dataset = fMRI_data(['AD', 'NC'],varbass=False,dir="/home/anzeng/rhb/fmri_data/oasis/fmri_nii/processing_fmri")
     voxnet = VoxNet()
     FCNs = Classifier_FCN(input_shape=[None,40,128],nb_classes=2)
 
@@ -21,7 +22,9 @@ def main(*argv):
     p['loss'] = tf.reduce_mean(p['loss'])
     p['l2_loss'] = tf.add_n([tf.nn.l2_loss(w) for w in FCNs.kernels])
 
-    p['correct_prediction'] = tf.equal(tf.argmax(FCNs[-1], 1), tf.argmax(p['labels'], 1))
+    p['prediction'] = tf.argmax(FCNs[-1],1)
+    p['y_true'] = tf.argmax(p['labels'],1)
+    p['correct_prediction'] = tf.equal(p['prediction'], p['y_true'])
     p['accuracy'] = tf.reduce_mean(tf.cast(p['correct_prediction'], tf.float32))
 
     p['learning_rate'] = tf.placeholder(tf.float32)
@@ -35,8 +38,8 @@ def main(*argv):
     num_batches = 2147483647
     batch_size = 8
 
-    initial_learning_rate = 0.001
-    min_learning_rate = 0.000001
+    initial_learning_rate = 0.01
+    min_learning_rate = 0.0001
     learning_rate_decay_limit = 0.0001
 
     num_batches_per_epoch = len(dataset.train) / float(batch_size)
@@ -58,7 +61,7 @@ def main(*argv):
 
     with tf.Session() as session:
         session.run(tf.global_variables_initializer())
-        # voxnet.npz_saver.restore(session, cfg.voxnet_checkpoint_dir)
+        voxnet.npz_saver.restore(session, cfg.voxnet_checkpoint_dir)
         #voxnet赋值
         voxnet_data = np.ones([1,61,73,61,1],np.float32)
         for batch_index in range(num_batches):
@@ -104,16 +107,19 @@ def main(*argv):
                 training_accuracy = total_accuracy / num_accuracy_batches
                 print('training accuracy: {}'.format(training_accuracy))
                 num_accuracy_batches = 10
-                total_accuracy = 0
+                total_evaluation = evaluation()
                 for x in range(num_accuracy_batches):
                     voxs, labels = dataset.test.get_time_batch(session,voxnet,time_dim=time_dim,batch_size=batch_size)
                     feed_dict = {FCNs[0]: voxs,voxnet[0]:voxnet_data, p['labels']: labels, FCNs.training: False}
-                    total_accuracy += session.run(p['accuracy'], feed_dict=feed_dict)
-                test_accuracy = total_accuracy / num_accuracy_batches
-                print('test accuracy: {}'.format(test_accuracy))
+                    predictions,y_true = session.run([p['prediction'],p['y_true']], feed_dict=feed_dict)
+                    total_evaluation += evaluation(y_true=y_true,y_predict=predictions)
+                    print(y_true,predictions)
+                    print(total_evaluation)
+                test_evaluation = total_evaluation / num_accuracy_batches
+                print('test accuracy \n'+str(test_evaluation))
                 # fr.write('test accuracy: {}'.format(test_accuracy))
                 with open(accuracy_filename, 'a') as f:
-                    f.write(' '.join(map(str, (checkpoint_num, training_accuracy, test_accuracy))) + '\n')
+                    f.write(' '.join(map(str, (checkpoint_num, training_accuracy, test_evaluation))) + '\n')
                 if batch_index % 256 == 0:
                     print('saving checkpoint {}...'.format(checkpoint_num))
                     filename = 'cx-{}.npz'.format(checkpoint_num)

@@ -3,15 +3,15 @@ import nibabel as nib
 from FCN import *
 from fmri_data import fMRI_data
 from config import cfg
-
+from evaluation import *
 
 def main(*argv):
-    dataset = fMRI_data(['AD', 'NC'], varbass=False, dir="/home/anzeng/rhb/fmri_data/246_feature_data")
+    dataset = fMRI_data(['MCIc', 'MCInc'], data_value=[0.7,0.3],varbass=False, dir="/home/anzeng/rhb/fmri_data")
 
     # 超参数设置
 
     num_batches = 2147483647
-    batch_size = 32
+    batch_size = 16
 
     initial_learning_rate = 0.001
     min_learning_rate = 0.000001
@@ -28,8 +28,12 @@ def main(*argv):
     min_loss = 1e308
 
     #模型框架
-
-    FCNs = Classifier_FCN(input_shape=[None,40,len(feature_index)],nb_classes=2)
+    mask = nib.load('/home/anzeng/rhb/fmri/fMRI-deeping-learning/BN_Atlas_246_3mm.nii')
+    mask = mask.get_fdata()
+    f_len = 0
+    for i in feature_index:
+        f_len += len(np.where(mask == i)[0])
+    FCNs = Classifier_FCN(input_shape=[None,40,f_len],nb_classes=2)
 
     # 创建数据
     p = dict()  # placeholders
@@ -40,6 +44,8 @@ def main(*argv):
     p['loss'] = tf.reduce_mean(p['loss'])
     p['l2_loss'] = tf.add_n([tf.nn.l2_loss(w) for w in FCNs.kernels])
 
+    p['prediction'] = tf.argmax(FCNs[-1],1)
+    p['y_true'] = tf.argmax(p['labels'],1)
     p['correct_prediction'] = tf.equal(tf.argmax(FCNs[-1], 1), tf.argmax(p['labels'], 1))
     p['accuracy'] = tf.reduce_mean(tf.cast(p['correct_prediction'], tf.float32))
 
@@ -49,20 +55,16 @@ def main(*argv):
     p['weights_decay'] = tf.train.GradientDescentOptimizer(p['learning_rate']).minimize(p['l2_loss'])
 
 
-
-
-    mask = nib.load('/home/anzeng/rhb/fmri/fMRI-deeping-learning/BN_Atlas_246_3mm.nii')
-    mask = mask.get_fdata()
     accuracy_filename = os.path.join(cfg.checkpoint_dir, 'accuracies.txt')
     if not os.path.isdir(cfg.checkpoint_dir):
         os.mkdir(cfg.checkpoint_dir)
 
-    with open(accuracy_filename, 'w') as f:
+    with open(accuracy_filename, 'a') as f:
         f.write(str(feature_index))
 
     with tf.Session() as session:
         session.run(tf.global_variables_initializer())
-        #voxnet赋值
+
         voxnet_data = np.ones([1,61,73,61,1],np.float32)
         for batch_index in range(num_batches):
 
@@ -73,7 +75,7 @@ def main(*argv):
             if batch_index > weights_decay_after and batch_index % 256 == 0:
                 session.run(p['weights_decay'], feed_dict=feed_dict)
 
-            voxs, labels = dataset.train.get_246_batch(mask,batch_size=batch_size,time_dim=time_dim,feature_index=feature_index)
+            voxs, labels = dataset.train.get_brain_batch(mask,batch_size=batch_size,time_dim=time_dim,feature_index=feature_index)
             feed_dict = {FCNs[0]: voxs, p['labels']: labels,
                          p['learning_rate']: learning_rate, FCNs.training: True}
 
@@ -99,22 +101,26 @@ def main(*argv):
                 num_accuracy_batches = 10
                 total_accuracy = 0
                 for x in range(num_accuracy_batches):
-                    voxs, labels = dataset.train.get_246_batch(mask, batch_size=batch_size, time_dim=time_dim,feature_index=feature_index)
+                    voxs, labels = dataset.get_brain_batch(mask, batch_size=batch_size, time_dim=time_dim,feature_index=feature_index)
                     feed_dict = {FCNs[0]: voxs,p['labels']: labels, FCNs.training: False}
                     total_accuracy += session.run(p['accuracy'], feed_dict=feed_dict)
                 training_accuracy = total_accuracy / num_accuracy_batches
                 print('training accuracy: {}'.format(training_accuracy))
                 num_accuracy_batches = 10
-                total_accuracy = 0
+                total_evaluation = evaluation()
                 for x in range(num_accuracy_batches):
-                    voxs, labels = dataset.test.get_246_batch(mask, batch_size=batch_size, time_dim=time_dim,feature_index=feature_index)
+                    voxs, labels = dataset.test.get_brain_batch(mask, batch_size=batch_size, time_dim=time_dim,feature_index=feature_index)
                     feed_dict = {FCNs[0]: voxs,p['labels']: labels, FCNs.training: False}
-                    total_accuracy += session.run(p['accuracy'], feed_dict=feed_dict)
-                test_accuracy = total_accuracy / num_accuracy_batches
-                print('test accuracy: {}'.format(test_accuracy))
+                    y_true,prediction = session.run([p['y_true'],p['prediction']], feed_dict=feed_dict)
+                    total_evaluation += evaluation(y_true=y_true,y_predict=prediction)
+                    print(y_true, prediction)
+                    print(total_evaluation)
+                test_evaluation = total_evaluation / num_accuracy_batches
+                print('test accuracy \n' + str(test_evaluation))
+                # fr.write('test accuracy: {}'.format(test_accuracy))
                 with open(accuracy_filename, 'a') as f:
-                    f.write(' '.join(map(str, (checkpoint_num, training_accuracy, test_accuracy))) + '\n')
-                if batch_index % 2048 == 0:
+                    f.write(' '.join(map(str, (checkpoint_num, training_accuracy, test_evaluation))) + '\n')
+                if batch_index % 1024 == 0:
                     print('saving checkpoint {}...'.format(checkpoint_num))
                     filename = 'cx-{}.npz'.format(checkpoint_num)
                     filename = os.path.join(cfg.checkpoint_dir, filename)
