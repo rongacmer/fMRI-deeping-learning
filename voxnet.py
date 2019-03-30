@@ -67,4 +67,4 @@ class VoxNet(BaseNet):
 if __name__ == '__main__':
     voxnet = VoxNet(voxnet_name='vx')
     print(voxnet)
-    print('\nTotal number of parameters: {}'.format(voxnet.total_params))
+    # print('\nTotal number of parameters: {}'.format(voxnet.total_params))

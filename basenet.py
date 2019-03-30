@@ -1,5 +1,6 @@
 import tensorflow as tf
 import numpy as np
+from tensorflow import keras
 from functools import reduce
 class NPZSaver(object):
 
@@ -15,6 +16,7 @@ class NPZSaver(object):
         kwds = np.load(f)
         for v in self._net.variables:
             if v.name in kwds:
+                print(v.name,kwds[v.name])
                 session.run(v.assign(kwds[v.name]))
 
 class BaseNet(object):

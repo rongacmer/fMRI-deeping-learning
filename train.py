@@ -2,20 +2,29 @@ import math, datetime, os
 from voxnet import *
 from fmri_data import fMRI_data
 from config import cfg
+from evaluation import evaluation
 def main(*argv):
 
-    dataset = fMRI_data(['EMCI','LMCI'],dir='/home/anzeng/rhb/fmri_data/MRI_data')
+    dataset = fMRI_data(['MCIc','MCInc'],dir='/home/anzeng/rhb/fmri_data/MRI_data/217',batch_mode='random',varbass=True)
     voxnet = VoxNet()
 
+    #数据权值
+    data_value=[[0.6],[0.4]]
     #创建数据
     p = dict()  # placeholders
 
     p['labels'] = tf.placeholder(tf.float32, [None, 2])
+    p['data_value'] = tf.placeholder(tf.float32,[2,1])
 
-    p['loss'] = tf.nn.softmax_cross_entropy_with_logits(logits=voxnet[-2], labels=p['labels'])
-    p['loss'] = tf.reduce_mean(p['loss'])
+    p['Weight'] = tf.matmul(p['labels'], p['data_value'])
+    p['cross_loss'] = tf.nn.softmax_cross_entropy_with_logits(logits=voxnet[-2], labels=p['labels'])
+    p['Weight'] = tf.reshape(p['Weight'], [-1])
+    p['x_loss'] = tf.multiply(p['Weight'], p['cross_loss'])
+    p['loss'] = tf.reduce_mean(p['x_loss'])
     p['l2_loss'] = tf.add_n([tf.nn.l2_loss(w) for w in voxnet.kernels])
 
+    p['prediction'] = tf.argmax(voxnet[-1], 1)
+    p['y_true'] = tf.argmax(p['labels'], 1)
     p['correct_prediction'] = tf.equal(tf.argmax(voxnet[-1], 1), tf.argmax(p['labels'], 1))
     p['accuracy'] = tf.reduce_mean(tf.cast(p['correct_prediction'], tf.float32))
 
@@ -29,8 +38,8 @@ def main(*argv):
     num_batches = 2147483647
     batch_size = 16
 
-    initial_learning_rate = 0.001
-    min_learning_rate = 0.000001
+    initial_learning_rate = 0.01
+    min_learning_rate = 0.00001
     learning_rate_decay_limit = 0.0001
 
     num_batches_per_epoch = len(dataset.train) / float(batch_size)
@@ -51,7 +60,7 @@ def main(*argv):
     with tf.Session() as session:
         session.run(tf.global_variables_initializer())
         if cfg.istraining:
-            voxnet.npz_saver.restore(session,cfg.checkpoint_dir)
+            voxnet.npz_saver.restore(session,cfg.voxnet_checkpoint_dir)
         for batch_index in range(num_batches):
 
             learning_rate = max(min_learning_rate,
@@ -63,7 +72,7 @@ def main(*argv):
 
             voxs, labels = dataset.train.get_batch(batch_size)
             feed_dict = {voxnet[0]: voxs, p['labels']: labels,
-                         p['learning_rate']: learning_rate, voxnet.training: True}
+                         p['learning_rate']: learning_rate, voxnet.training: True,p['data_value']:data_value}
 
             session.run(p['train'], feed_dict=feed_dict)
 
@@ -93,15 +102,18 @@ def main(*argv):
                 training_accuracy = total_accuracy / num_accuracy_batches
                 print('training accuracy: {}'.format(training_accuracy))
                 num_accuracy_batches = 90
-                total_accuracy = 0
+                total_evaluation = evaluation()
                 for x in range(num_accuracy_batches):
                     voxs, labels = dataset.test.get_batch(batch_size)
-                    feed_dict = {voxnet[0]: voxs, p['labels']: labels, voxnet.training: False}
-                    total_accuracy += session.run(p['accuracy'], feed_dict=feed_dict)
-                test_accuracy = total_accuracy / num_accuracy_batches
-                print('test accuracy: {}'.format(test_accuracy))
+                    feed_dict = {voxnet[0]: voxs,  p['labels']: labels, voxnet.training: False}
+                    predictions, y_true = session.run([p['prediction'], p['y_true']], feed_dict=feed_dict)
+                    total_evaluation += evaluation(y_true=y_true, y_predict=predictions)
+                    # print(y_true, predictions)
+                    print(total_evaluation)
+                test_evaluation = total_evaluation / num_accuracy_batches
+                print('test accuracy \n' + str(test_evaluation))
                 with open(accuracy_filename, 'a') as f:
-                    f.write(' '.join(map(str, (checkpoint_num, training_accuracy, test_accuracy))) + '\n')
+                    f.write(' '.join(map(str, (checkpoint_num, training_accuracy, test_evaluation))) + '\n')
                 if batch_index % 2048 == 0:
                     print('saving checkpoint {}...'.format(checkpoint_num))
                     filename = 'cx-{}.npz'.format(checkpoint_num)

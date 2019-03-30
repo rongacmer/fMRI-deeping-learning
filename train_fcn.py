@@ -9,17 +9,23 @@ from evaluation import *
 
 def main(*argv):
     # fr = open(cfg.output, 'w')
-    dataset = fMRI_data(['AD', 'NC'],varbass=False,dir="/home/anzeng/rhb/fmri_data/oasis/fmri_nii/processing_fmri")
+    dataset = fMRI_data(['MCIc', 'MCInc'],varbass=False,dir="/home/anzeng/rhb/fmri_data/212_218")
     voxnet = VoxNet()
-    FCNs = Classifier_FCN(input_shape=[None,40,128],nb_classes=2)
+    FCNs = Classifier_FCN(input_shape=[None,80,128],nb_classes=2)
+
+    data_value = [[0.7], [0.3]]
 
     # 创建数据
     p = dict()  # placeholders
 
     p['labels'] = tf.placeholder(tf.float32, [None, 2])
+    p['data_value'] = tf.placeholder(tf.float32, [2, 1])
 
-    p['loss'] = tf.nn.softmax_cross_entropy_with_logits(logits=FCNs[-2], labels=p['labels'])
-    p['loss'] = tf.reduce_mean(p['loss'])
+    p['Weight'] = tf.matmul(p['labels'], p['data_value'])
+    p['cross_loss'] = tf.nn.softmax_cross_entropy_with_logits(logits=FCNs[-2], labels=p['labels'])
+    p['Weight'] = tf.reshape(p['Weight'], [-1])
+    p['x_loss'] = tf.multiply(p['Weight'], p['cross_loss'])
+    p['loss'] = tf.reduce_mean(p['x_loss'])
     p['l2_loss'] = tf.add_n([tf.nn.l2_loss(w) for w in FCNs.kernels])
 
     p['prediction'] = tf.argmax(FCNs[-1],1)
@@ -46,7 +52,7 @@ def main(*argv):
     learning_decay = 10 * num_batches_per_epoch
     weights_decay_after = 5 * num_batches_per_epoch
 
-    time_dim = 40 #挑选时间片个数
+    time_dim = 80 #挑选时间片个数
     checkpoint_num = 0
     learning_step = 0
     min_loss = 1e308
@@ -75,7 +81,7 @@ def main(*argv):
 
             voxs, labels = dataset.train.get_time_batch(session,voxnet,time_dim=time_dim,batch_size=batch_size)
             feed_dict = {FCNs[0]: voxs,voxnet[0]:voxnet_data, p['labels']: labels,
-                         p['learning_rate']: learning_rate, FCNs.training: True}
+                         p['learning_rate']: learning_rate, FCNs.training: True,p['data_value']:data_value}
 
             session.run(p['train'], feed_dict=feed_dict)
 
@@ -128,7 +134,7 @@ def main(*argv):
                     print('checkpoint saved!')
                     checkpoint_num += 1
             end = time.time()
-            print(time.time(),(end-start)/60)
+            print('time:',(end-start)/60)
 
 
 if __name__ == '__main__':

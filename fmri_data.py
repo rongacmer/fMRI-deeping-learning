@@ -16,14 +16,13 @@ from voxnet import VoxNet
 class fMRI_data(object):
 
     #不同类别赋予不同的权值
-    def __init__(self, data_type=['AD','NC'],data_value=[0.5,0.5],batch_size=None,varbass = False,dir="/home/anzeng/rhb/fmri_data"):
+    def __init__(self, data_type=['AD','NC'],batch_size=None,batch_mode = 'oversampling',varbass = False,dir="/home/anzeng/rhb/fmri_data"):
         class MRI(object):
-            def __init__(self, fi, label, category,value):
+            def __init__(self, fi, label, category):
                 #fi:路径名,label:标签,category:类别
                 self._fi = fi
                 self._label = label
                 self._category = category
-                self._value = value
 
             @property
             def mri(self):
@@ -39,9 +38,6 @@ class fMRI_data(object):
             def category(self):
                 return self._category
 
-            @property
-            def value(self):
-                return self._value
 
             @property
             def filename(self):
@@ -53,8 +49,9 @@ class fMRI_data(object):
 
         ############初始化数据集信息######################
         self._batch_size = batch_size
-        self._varbass = varbass
+        self._varbass = varbass #是否输出调试信息
         self._mode = 'train'
+        self._batch_mode = batch_mode #采样模式 oversampling:过取样,random:随机取样
         self._data_type=data_type
         self._dir = dir  #地址索引
         self._iters = {}
@@ -84,14 +81,12 @@ class fMRI_data(object):
         #标签制作
         categories = sorted(list(set(c for c, i in self._data['test'])))
         categories = dict(zip(categories, range(len(categories))))
-        categories_value = dict(zip(data_type,data_value))
-
+        print(categories)
         for k in self._data:
-            self._data[k] = [MRI(i, categories[c], c,categories_value[c]) for c, i in self._data[k]]
+            self._data[k] = [MRI(i, categories[c], c) for c, i in self._data[k]]
             self._iters[k] = iter(get_random_iter(k))
         self.categories = categories.keys()
         print(str(self._data_type) + 'database setup complete!')
-
 
 
     @property
@@ -123,17 +118,47 @@ class fMRI_data(object):
         one_hots = np.zeros([bs, self.num_categories], dtype=np.float32)
         data = self._data[self._mode]
         next_int = self._iters[self._mode].__next__
-        for bi in range(bs):
-            index = next_int()
-            v = data[index]
-            d = v.mri.reshape([61, 73, 61, 1])
-            for axis in 0, 1, 2:
-                if rn(0, 1):
-                    d = np.flip(d, axis)
-            voxs[bi] = d
-            # ox, oy, oz = rn(0, 2), rn(0, 2), rn(0, 2)
-            # voxs[bi, ox:30 + ox, oy:30 + oy, oz:30 + oz] = d
-            one_hots[bi][v.label] = 1
+        P,N = 0,0
+        sum = 0
+        #令两个类别的数据数量相同
+        if self._mode == 'train' and self._batch_mode=='oversampling':
+            while sum < bs:
+                index = next_int()
+                if data[index].label == 0 and P < batch_size/2:
+                    v = data[index]
+                    d = v.mri.reshape([61, 73, 61, 1])
+                    for axis in 0, 1, 2:
+                        if rn(0, 1):
+                            d = np.flip(d, axis)
+                    voxs[sum] = d
+                    one_hots[sum][v.label] = 1
+                    P += 1
+                    sum += 1
+                if data[index].label == 1 and N < batch_size/2:
+                    v = data[index]
+                    d = v.mri.reshape([61, 73, 61, 1])
+                    for axis in 0, 1, 2:
+                        if rn(0, 1):
+                            d = np.flip(d, axis)
+                    voxs[sum] = d
+                    one_hots[sum][v.label] = 1
+                    N += 1
+                    sum += 1
+
+        else:
+            for bi in range(bs):
+                index = next_int()
+                v = data[index]
+                d = v.mri.reshape([61, 73, 61, 1])
+                for axis in 0, 1, 2:
+                    if rn(0, 1):
+                        d = np.flip(d, axis)
+                voxs[bi] = d
+                # ox, oy, oz = rn(0, 2), rn(0, 2), rn(0, 2)
+                # voxs[bi, ox:30 + ox, oy:30 + oy, oz:30 + oz] = d
+                one_hots[bi][v.label] = 1
+        if self._varbass:
+            print(one_hots)
         return voxs, one_hots
 
     #fmri经过voxnet获取时间序列
@@ -153,21 +178,23 @@ class fMRI_data(object):
             index = next_int()
             v = data[index]
             #加载图片
-            img = nib.load(v._fi)
-            img_data = img.get_fdata()
-            img_data = np.transpose(img_data, [3, 0, 1, 2])
+            # img = nib.load(v._fi)
+            img_data = np.load(v._fi)
+            # img_data = np.transpose(img_data, [3, 0, 1, 2])
             img_data = np.reshape(img_data,[-1,61,73,61,1])
             img_data = img_data.astype(np.float32)
-            #时间点选择
-            time_stamp = np.linspace(0,img_data.shape[0]-1,time_dim)
-            time_stamp = list(map(lambda x:int(x),time_stamp))
-            time_stamp_img = img_data[time_stamp]
+            # 时间点选择
+            # time_stamp_img = img_data[self.get_time_stamp(img_data.shape[0], time_dim)]
+            time_stamp_img = img_data[0:min(time_dim,img_data.shape[0])]
+            # time_stamp = np.linspace(0,img_data.shape[0]-1,time_dim)
+            # time_stamp = list(map(lambda x:int(x),time_stamp))
+            # time_stamp_img = img_data[time_stamp]
             #获取特征
             time_feature = sess.run(p['output'],feed_dict={voxnet[0]:time_stamp_img})
             if self._varbass:
                 print(time_feature.shape)
-            time_serial[bi] = time_feature
-            one_hots[bi][v.label] = v.value
+            time_serial[bi][0:min(time_dim,img_data.shape[0])] = time_feature
+            one_hots[bi][v.label] = 1
         return time_serial,one_hots
 
     #获取时间片
@@ -204,7 +231,7 @@ class fMRI_data(object):
             time_stamp = list(map(lambda x: int(x), time_stamp))
             time_stamp = img_data[time_stamp]
             time_serial[bi] = time_stamp[:,feature_index].copy()
-            one_hots[bi][v.label] = v.value
+            one_hots[bi][v.label] = 1
             # print(time_serial[bi])
         return time_serial, one_hots
 
@@ -236,7 +263,7 @@ class fMRI_data(object):
                 tmp = np.where(mask == feature)
                 new_feature = time_stamp[:,tmp[0],tmp[1],tmp[2]]
                 time_serial[bi][:,One_len[f_index]:One_len[f_index+1]] = new_feature
-            one_hots[bi][v.label] = v.value
+            one_hots[bi][v.label] = 1
         return time_serial, one_hots
 
 def main(_):
