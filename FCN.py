@@ -36,12 +36,12 @@ class Classifier_FCN(BaseNet):
     def softmax(self, name, x):
         return tf.nn.softmax(x)
 
-    def __init__(self,input_shape, nb_classes, verbose=False,fcn_name='fcns'):
+    def __init__(self,x,nb_classes, verbose=False,fcn_name='fcns'):
         self.training = tf.placeholder_with_default(False, shape=None)
 
         #FCNs模型构建############
         super(Classifier_FCN, self).__init__(fcn_name,
-                                     tf.placeholder(tf.float32, input_shape,fcn_name+'/input'))
+                                     x)
         self.conv1d('conv1',num_filters=128,filter_size=8,stride=1)
         self.conv1d('conv2',num_filters=256,filter_size=5,stride=1)
         self.conv1d('conv3',num_filters=128,filter_size=3,stride=1)

@@ -1,44 +1,53 @@
 import tensorflow as tf
 class evaluation:
     def __init__(self,y_true = None,y_predict = None):
-        TP,TN,FP,FN = 0,0,0,0
+        self.TP,self.TN,self.FP,self.FN = 0,0,0,0
         y_len = len(y_true) if y_true is not None else 0
         for i in range(y_len):
             if y_true[i] == 0 and y_predict[i] == 0:
-                TP += 1
+                self.TP += 1
             if y_true[i] == 0 and y_predict[i] == 1:
-                FN += 1
+                self.FN += 1
             if y_true[i] == 1 and y_predict[i] == 0:
-                FP += 1
+                self.FP += 1
             if y_true[i] == 1 and y_predict[i] == 1:
-                TN += 1
-        self.SEN = 0
-        self.SPE = 0
-        self.ACC = 0
-        if TP:
-            self.SEN= TP / (TP + FN)
-        if TN:
-            self.SPE = TN/ (TN + FP)
-        if y_len:
-            self.ACC = (TP + TN)/y_len
+                self.TN += 1
+
+    @property
+    def SEN(self):
+        if self.TP:
+            return self.TP/(self.TP+self.FN)
+        return 0
+
+    @property
+    def SPE(self):
+        if self.TN:
+            return self.TN/(self.TN+self.FP)
+        return 0
+
+    @property
+    def ACC(self):
+        if self.TP or self.TN:
+            return (self.TP+self.TN)/(self.TP+self.TN+self.FP+self.FN)
 
     def __str__(self):
         return 'ACC:'+str(self.ACC)+' SEN:'+str(self.SEN)+' SPE:'+str(self.SPE)
 
     def __iadd__(self, b):
-        self.ACC += b.ACC
-        self.SEN += b.SEN
-        self.SPE += b.SPE
+        self.TP += b.TP
+        self.TN += b.TN
+        self.FP += b.FP
+        self.FN += b.FN
         return self
 
-    def __itruediv__(self, b):
-        self.ACC /= b
-        self.SEN /= b
-        self.SPE /= b
-        return self
-
-    def __truediv__(self, other):
-        return self.__itruediv__(other)
+    # def __itruediv__(self, b):
+    #     self.ACC /= b
+    #     self.SEN /= b
+    #     self.SPE /= b
+    #     return self
+    #
+    # def __truediv__(self, other):
+    #     return self.__itruediv__(other)
 
 def test():
     # p=dict()

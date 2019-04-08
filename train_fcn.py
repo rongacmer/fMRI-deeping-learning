@@ -7,13 +7,24 @@ import time
 from evaluation import *
 
 
-def main(*argv):
+def main(data_index=None,cut_shape=None,data_type=['MCIc','MCInc'],pre_dir='/home/anzeng/rhb/fmri_data',
+         num_batches = 256*5,voxnet_point=None,test_size = 6,brain_map=[217]):
     # fr = open(cfg.output, 'w')
-    dataset = fMRI_data(['MCIc', 'MCInc'],varbass=False,dir="/home/anzeng/rhb/fmri_data/212_218")
-    voxnet = VoxNet()
-    FCNs = Classifier_FCN(input_shape=[None,80,128],nb_classes=2)
+    tf.reset_default_graph()
 
-    data_value = [[0.7], [0.3]]
+    time_dim = 80  # 挑选时间片个数
+    batch_size = 8
+
+    dataset = fMRI_data(data_type,data_index=data_index,varbass=False,dir=pre_dir)
+    input_shape = [None]
+    for i in range(3):
+        input_shape.append(cut_shape[2 * i + 1] + 1 - cut_shape[2 * i])
+    input_shape.append(1)
+    print(input_shape)
+    voxnet = VoxNet(input_shape=input_shape, voxnet_type='cut')
+    FCNs = Classifier_FCN(tf.placeholder(tf.float32,[None,time_dim,128]),nb_classes=2)
+
+    data_value = [[1], [1]]
 
     # 创建数据
     p = dict()  # placeholders
@@ -41,8 +52,6 @@ def main(*argv):
     # p['test_error'] = tf.placeholder(tf.float32)
     # 超参数设置
 
-    num_batches = 2147483647
-    batch_size = 8
 
     initial_learning_rate = 0.01
     min_learning_rate = 0.0001
@@ -52,24 +61,33 @@ def main(*argv):
     learning_decay = 10 * num_batches_per_epoch
     weights_decay_after = 5 * num_batches_per_epoch
 
-    time_dim = 80 #挑选时间片个数
+
     checkpoint_num = 0
     learning_step = 0
     min_loss = 1e308
 
-    accuracy_filename = os.path.join(cfg.checkpoint_dir, 'accuracies.txt')
-    if not os.path.isdir(cfg.checkpoint_dir):
-        os.mkdir(cfg.checkpoint_dir)
+    if voxnet_point:
+        cfg.voxnet_checkpoint = voxnet_point
+
+    accuracy_filename = os.path.join(cfg.fcn_checkpoint_dir, 'accuracies.txt')
+    if not os.path.isdir(cfg.fcn_checkpoint_dir):
+        os.mkdir(cfg.fcn_checkpoint_dir)
 
     if not os.path.exists(accuracy_filename):
-        with open(accuracy_filename, 'w') as f:
+        with open(accuracy_filename, 'a') as f:
             f.write('')
+    with open(accuracy_filename,'a') as f:
+        f.write(str(brain_map)+'\n')
 
+    #返回值
+    total_evaluation = evaluation()
     with tf.Session() as session:
         session.run(tf.global_variables_initializer())
-        voxnet.npz_saver.restore(session, cfg.voxnet_checkpoint_dir)
+        voxnet.npz_saver.restore(session, cfg.voxnet_checkpoint)
         #voxnet赋值
-        voxnet_data = np.ones([1,61,73,61,1],np.float32)
+        input_shape[0]=1
+        voxnet_data = np.ones(input_shape,np.float32)
+        input_shape[0]=-1
         for batch_index in range(num_batches):
             start = time.time()
             learning_rate = max(min_learning_rate,
@@ -79,7 +97,7 @@ def main(*argv):
             if batch_index > weights_decay_after and batch_index % 256 == 0:
                 session.run(p['weights_decay'], feed_dict=feed_dict)
 
-            voxs, labels = dataset.train.get_time_batch(session,voxnet,time_dim=time_dim,batch_size=batch_size)
+            voxs, labels = dataset.train.oversampling.get_time_batch(session,voxnet,cut_shape,time_dim=time_dim,batch_size=batch_size)
             feed_dict = {FCNs[0]: voxs,voxnet[0]:voxnet_data, p['labels']: labels,
                          p['learning_rate']: learning_rate, FCNs.training: True,p['data_value']:data_value}
 
@@ -107,34 +125,33 @@ def main(*argv):
                 num_accuracy_batches = 10
                 total_accuracy = 0
                 for x in range(num_accuracy_batches):
-                    voxs, labels = dataset.train.get_time_batch(session,voxnet,time_dim=time_dim,batch_size=batch_size)
+                    voxs, labels = dataset.train.random_sampling.get_time_batch(session,voxnet,cut_shape,time_dim=time_dim,batch_size=batch_size)
                     feed_dict = {FCNs[0]: voxs, voxnet[0]:voxnet_data,p['labels']: labels, FCNs.training: False}
                     total_accuracy += session.run(p['accuracy'], feed_dict=feed_dict)
                 training_accuracy = total_accuracy / num_accuracy_batches
                 print('training accuracy: {}'.format(training_accuracy))
-                num_accuracy_batches = 10
+                num_accuracy_batches = test_size
                 total_evaluation = evaluation()
                 for x in range(num_accuracy_batches):
-                    voxs, labels = dataset.test.get_time_batch(session,voxnet,time_dim=time_dim,batch_size=batch_size)
+                    voxs, labels = dataset.test.random_sampling.get_time_batch(session,voxnet,cut_shape,time_dim=time_dim,batch_size=batch_size)
                     feed_dict = {FCNs[0]: voxs,voxnet[0]:voxnet_data, p['labels']: labels, FCNs.training: False}
                     predictions,y_true = session.run([p['prediction'],p['y_true']], feed_dict=feed_dict)
                     total_evaluation += evaluation(y_true=y_true,y_predict=predictions)
-                    print(y_true,predictions)
                     print(total_evaluation)
-                test_evaluation = total_evaluation / num_accuracy_batches
-                print('test accuracy \n'+str(test_evaluation))
+                print('test accuracy \n'+str(total_evaluation))
                 # fr.write('test accuracy: {}'.format(test_accuracy))
                 with open(accuracy_filename, 'a') as f:
-                    f.write(' '.join(map(str, (checkpoint_num, training_accuracy, test_evaluation))) + '\n')
+                    f.write(' '.join(map(str, (checkpoint_num, training_accuracy, total_evaluation))) + '\n')
                 if batch_index % 256 == 0:
                     print('saving checkpoint {}...'.format(checkpoint_num))
                     filename = 'cx-{}.npz'.format(checkpoint_num)
-                    filename = os.path.join(cfg.checkpoint_dir, filename)
+                    filename = os.path.join(cfg.fcn_checkpoint_dir, filename)
                     FCNs.npz_saver.save(session, filename)
                     print('checkpoint saved!')
                     checkpoint_num += 1
             end = time.time()
             print('time:',(end-start)/60)
+    return total_evaluation
 
 
 if __name__ == '__main__':
