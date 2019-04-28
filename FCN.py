@@ -13,6 +13,7 @@ class Classifier_FCN(BaseNet):
         with tf.variable_scope(name) as scope:
             x = tf.layers.conv1d(x, num_filters, filter_size, stride, padding)
             x = tf.layers.batch_normalization(x, training=self.training)
+            x = tf.layers.dropout(x,self.keep_prob)
             return tf.maximum(x, relu_alpha * x)  # leaky relu
 
     @BaseNet.layer
@@ -38,7 +39,7 @@ class Classifier_FCN(BaseNet):
 
     def __init__(self,x,nb_classes, verbose=False,fcn_name='fcns'):
         self.training = tf.placeholder_with_default(False, shape=None)
-
+        self.keep_prob = tf.placeholder(tf.float32)
         #FCNs模型构建############
         super(Classifier_FCN, self).__init__(fcn_name,
                                      x)
@@ -51,6 +52,6 @@ class Classifier_FCN(BaseNet):
         #########################
 
 if __name__ == '__main__':
-    FCN = Classifier_FCN([None,40,128],2)
+    FCN = Classifier_FCN(tf.placeholder(tf.float32,[None,80,50]),nb_classes=2)
     print('\nTotal number of parameters: {}'.format(FCN.total_params))
     print(FCN)

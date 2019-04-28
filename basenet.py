@@ -13,9 +13,12 @@ class NPZSaver(object):
 
     def restore(self,session,f):
         #加载模型#
+        # print('start download')
         kwds = np.load(f)
         for v in self._net.variables:
             if v.name in kwds:
+                # print(v.name)
+                # print(v.shape)
                 session.run(v.assign(kwds[v.name]))
 
 class BaseNet(object):

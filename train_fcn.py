@@ -5,6 +5,7 @@ from fmri_data import fMRI_data
 from config import cfg
 import time
 from evaluation import *
+from sklearn import svm
 
 
 def main(data_index=None,cut_shape=None,data_type=['MCIc','MCInc'],pre_dir='/home/anzeng/rhb/fmri_data',
@@ -16,13 +17,37 @@ def main(data_index=None,cut_shape=None,data_type=['MCIc','MCInc'],pre_dir='/hom
     batch_size = 8
 
     dataset = fMRI_data(data_type,data_index=data_index,varbass=False,dir=pre_dir)
-    input_shape = [None]
-    for i in range(3):
-        input_shape.append(cut_shape[2 * i + 1] + 1 - cut_shape[2 * i])
-    input_shape.append(1)
-    print(input_shape)
+    #SVM index
+
+    #########################
+    svm_index = {}
+    train_len = 0
+    test_len = 0
+    for d_type in data_type:
+        t_dir = os.path.join(pre_dir,d_type)
+        t_len = os.listdir(t_dir)
+        t_len = len(t_len)
+        train_index = list(range(t_len))
+        test_index = data_index[d_type]['test']
+        for x in test_index:
+            train_index.remove(x)
+        _index = {'train':train_index,'test':test_index}
+        train_len += len(train_index)
+        test_len += len(test_index)
+        svm_index[d_type] = _index
+    print(train_len)
+    print(test_len)
+    print(svm_index)
+    svm_dataset = fMRI_data(data_type,data_index = svm_index,varbass=False,dir=pre_dir)
+    ##########################
+    xyz = 32
+    input_shape = [None,xyz,xyz,xyz,1]
+    # for i in range(3):
+    #     input_shape.append(cut_shape[2 * i + 1] + 1 - cut_shape[2 * i])
+    # input_shape.append(1)
+    # print(input_shape)
     voxnet = VoxNet(input_shape=input_shape, voxnet_type='cut')
-    FCNs = Classifier_FCN(tf.placeholder(tf.float32,[None,time_dim,128]),nb_classes=2)
+    FCNs = Classifier_FCN(tf.placeholder(tf.float32,[None,time_dim,50]),nb_classes=2)
 
     data_value = [[1], [1]]
 
@@ -54,7 +79,7 @@ def main(data_index=None,cut_shape=None,data_type=['MCIc','MCInc'],pre_dir='/hom
 
 
     initial_learning_rate = 0.01
-    min_learning_rate = 0.0001
+    min_learning_rate = 0.000001
     learning_rate_decay_limit = 0.0001
 
     num_batches_per_epoch = len(dataset.train) / float(batch_size)
@@ -80,7 +105,7 @@ def main(data_index=None,cut_shape=None,data_type=['MCIc','MCInc'],pre_dir='/hom
         f.write(str(brain_map)+'\n')
 
     #返回值
-    total_evaluation = evaluation()
+    test_evaluation = evaluation()
     with tf.Session() as session:
         session.run(tf.global_variables_initializer())
         voxnet.npz_saver.restore(session, cfg.voxnet_checkpoint)
@@ -90,15 +115,16 @@ def main(data_index=None,cut_shape=None,data_type=['MCIc','MCInc'],pre_dir='/hom
         input_shape[0]=-1
         for batch_index in range(num_batches):
             start = time.time()
-            learning_rate = max(min_learning_rate,
-                                initial_learning_rate * 0.5 ** (learning_step / learning_decay))
+            # learning_rate = max(min_learning_rate,
+            #                     initial_learning_rate * 0.5 ** (learning_step / learning_decay))
+            learning_rate = 0.0001
             learning_step += 1
 
             if batch_index > weights_decay_after and batch_index % 256 == 0:
                 session.run(p['weights_decay'], feed_dict=feed_dict)
 
             voxs, labels = dataset.train.oversampling.get_time_batch(session,voxnet,cut_shape,time_dim=time_dim,batch_size=batch_size)
-            feed_dict = {FCNs[0]: voxs,voxnet[0]:voxnet_data, p['labels']: labels,
+            feed_dict = {FCNs[0]: voxs,voxnet[0]:voxnet_data,voxnet.keep_prob:1.0,FCNs.keep_prob:0.7, p['labels']: labels,
                          p['learning_rate']: learning_rate, FCNs.training: True,p['data_value']:data_value}
 
             session.run(p['train'], feed_dict=feed_dict)
@@ -122,36 +148,74 @@ def main(data_index=None,cut_shape=None,data_type=['MCIc','MCInc'],pre_dir='/hom
                 min_loss = min(loss, min_loss)
 
             if batch_index and batch_index % 16 == 0:
-                num_accuracy_batches = 10
-                total_accuracy = 0
+                num_accuracy_batches = 20
+                train_evaluation = evaluation()
                 for x in range(num_accuracy_batches):
                     voxs, labels = dataset.train.random_sampling.get_time_batch(session,voxnet,cut_shape,time_dim=time_dim,batch_size=batch_size)
-                    feed_dict = {FCNs[0]: voxs, voxnet[0]:voxnet_data,p['labels']: labels, FCNs.training: False}
-                    total_accuracy += session.run(p['accuracy'], feed_dict=feed_dict)
-                training_accuracy = total_accuracy / num_accuracy_batches
-                print('training accuracy: {}'.format(training_accuracy))
+                    feed_dict = {FCNs[0]: voxs, voxnet[0]:voxnet_data,voxnet.keep_prob:1.0,FCNs.keep_prob:1.0,p['labels']: labels, FCNs.training: False}
+                    predictions, y_true = session.run([p['prediction'], p['y_true']], feed_dict=feed_dict)
+                    train_evaluation += evaluation(y_true=y_true, y_predict=predictions)
+                print('training accuracy \n' + str(train_evaluation))
                 num_accuracy_batches = test_size
-                total_evaluation = evaluation()
+                test_evaluation = evaluation()
                 for x in range(num_accuracy_batches):
                     voxs, labels = dataset.test.random_sampling.get_time_batch(session,voxnet,cut_shape,time_dim=time_dim,batch_size=batch_size)
-                    feed_dict = {FCNs[0]: voxs,voxnet[0]:voxnet_data, p['labels']: labels, FCNs.training: False}
+                    feed_dict = {FCNs[0]: voxs,voxnet[0]:voxnet_data,voxnet.keep_prob:1.0,FCNs.keep_prob:1.0, p['labels']: labels, FCNs.training: False}
                     predictions,y_true = session.run([p['prediction'],p['y_true']], feed_dict=feed_dict)
-                    total_evaluation += evaluation(y_true=y_true,y_predict=predictions)
-                    print(total_evaluation)
-                print('test accuracy \n'+str(total_evaluation))
-                # fr.write('test accuracy: {}'.format(test_accuracy))
+                    test_evaluation += evaluation(y_true=y_true, y_predict=predictions)
+                    print(test_evaluation)
+                print('test accuracy \n'+str(test_evaluation))
                 with open(accuracy_filename, 'a') as f:
-                    f.write(' '.join(map(str, (checkpoint_num, training_accuracy, total_evaluation))) + '\n')
-                if batch_index % 256 == 0:
+                    f.write('checkpoint_num:' + str(checkpoint_num) + ':\n')
+                    f.write('train:\n' + str(train_evaluation) + '\n')
+                    f.write('test:\n' + str(test_evaluation) + '\n')
+                if batch_index % 64 or train_evaluation.ACC >= 0.8 == 0:
+                    ######SVM分类器####################
+                    svm_feature = np.zeros((train_len+test_len,128))
+                    svm_label = np.zeros(train_len+test_len)
+                    for x in range(train_len):
+                        voxs, labels = svm_dataset.train.random_sampling.get_time_batch(session,voxnet,cut_shape,time_dim=time_dim,batch_size = 1)
+                        feed_dict = {FCNs[0]: voxs, voxnet[0]: voxnet_data,voxnet.keep_prob:1.0,FCNs.keep_prob:1.0, p['labels']: labels, FCNs.training: False}
+                        feature,y_true = session.run([FCNs['gap'],p['y_true']],feed_dict = feed_dict)
+                        feature = np.reshape(feature,[1,128])
+                        svm_feature[x] = feature
+                        # print(svm_feature[x])
+                        svm_label[x] = y_true
+                    for x in range(test_len):
+                        voxs, labels = svm_dataset.test.random_sampling.get_time_batch(session,voxnet,cut_shape,time_dim=time_dim,batch_size = 1)
+                        feed_dict = {FCNs[0]: voxs, voxnet[0]: voxnet_data,voxnet.keep_prob:1.0,FCNs.keep_prob:1.0, p['labels']: labels, FCNs.training: False}
+                        feature,y_true = session.run([FCNs['gap'],p['y_true']],feed_dict = feed_dict)
+                        feature = np.reshape(feature,[1, 128])
+                        svm_feature[train_len + x] = feature
+                        svm_label[train_len + x] = y_true
+                    # print(svm_feature[0:train_len])
+                    # print(svm_label[0:train_len])
+                    clf = svm.SVC(C=1.0,kernel='rbf',gamma='auto')
+                    clf.fit(svm_feature[0:train_len],svm_label[0:train_len])
+                    predictions = clf.predict(svm_feature)
+                    svm_train_evaluation = evaluation(y_true=svm_label[:train_len],y_predict=predictions[:train_len])
+                    svm_test_evaluation = evaluation(y_true=svm_label[train_len:],y_predict=predictions[train_len:])
+                    print('svm_train:\n'+str(svm_train_evaluation))
+                    print('svm_test:\n' + str(svm_test_evaluation))
+                    with open(accuracy_filename,'a') as f:
+                        f.write('svm_train:\n' + str(svm_train_evaluation) + '\n')
+                        f.write('svm_test:\n' + str(svm_test_evaluation) + '\n')
+                    #################################################
+
+                # fr.write('test accuracy: {}'.format(test_accuracy))
+
+                if batch_index % 128 == 0 or train_evaluation.ACC >= 0.85:
                     print('saving checkpoint {}...'.format(checkpoint_num))
                     filename = 'cx-{}.npz'.format(checkpoint_num)
                     filename = os.path.join(cfg.fcn_checkpoint_dir, filename)
                     FCNs.npz_saver.save(session, filename)
                     print('checkpoint saved!')
                     checkpoint_num += 1
+                    if train_evaluation.ACC >= 0.85:
+                        break
             end = time.time()
             print('time:',(end-start)/60)
-    return total_evaluation
+    return test_evaluation
 
 
 if __name__ == '__main__':

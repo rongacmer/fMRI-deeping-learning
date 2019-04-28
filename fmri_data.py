@@ -16,7 +16,7 @@ from voxnet import VoxNet
 class fMRI_data(object):
 
     #不同类别赋予不同的权值
-    def __init__(self, data_type=['AD','NC'],data_index=None,batch_size=None,batch_mode = 'oversampling',varbass = False,dir="/home/anzeng/rhb/fmri_data"):
+    def __init__(self, data_type=['AD','NC'],data_index=None,batch_size=None,batch_mode = 'oversampling',varbass = False,dir="/home/anzeng/rhb/fmri_data",model = None,cut_shape = None):
         #data_index={'data_type':{'train':[],'test':[]}}
         class MRI(object):
             def __init__(self, fi, label, category):
@@ -58,15 +58,17 @@ class fMRI_data(object):
         self._iters = {'oversampling':{'train':{},'test':{}},'random':{}}
         self._data = {'train': [], 'test': []}
         self._data_len = {'train':{},'test':{}}
+        self._model = model
+
         ###################################################
 
         ########迭代器############
-        def get_random_iter(mode,data_type = None):
+        def get_random_iter(mode,_batch_mode,data_type = None,):
             # print(mode, data_type)
             while 1:
-                if self._batch_mode == 'oversampling':
+                if _batch_mode == 'oversampling':
                     seq = self._data_len[mode][data_type]
-                if self._batch_mode == 'random':
+                if _batch_mode == 'random':
                     seq = [0,len(self._data[mode])]
                 order = np.arange(seq[0],seq[1],1)
                 # print('order:',order)
@@ -76,6 +78,10 @@ class fMRI_data(object):
         print('Setting up ' +str(self._data_type)+'database... ')
 
         #加载数据，模型:标签，文件路径
+        true_shape = []  # 实际大小
+        # flag = 0
+        for x in range(0, len(cut_shape), 2):
+            true_shape.append(cut_shape[x + 1] - cut_shape[x] + 1)
         p=dict()
         p['train_start'] = 0
         p['test_start'] = 0
@@ -106,7 +112,25 @@ class fMRI_data(object):
                         category = classification
                         train_or_test=mode
                         filename = os.path.join(now_dir,lists[i])
-                        self._data[train_or_test].append((category,filename))
+                        if self._model:
+                            xyz = 32
+                            img = np.load(filename)
+                            new_feature = img[0:img.shape[0], cut_shape[0]:cut_shape[1] + 1,
+                                          cut_shape[2]:cut_shape[3] + 1,
+                                          cut_shape[4]:cut_shape[5] + 1]
+                            # 调整形状
+                            new_shape = [new_feature.shape[0], true_shape[0], true_shape[1], true_shape[2], 1]
+                            new_feature = np.reshape(new_feature, new_shape)
+                            start_x = (xyz - true_shape[0]) // 2
+                            start_y = (xyz - true_shape[1]) // 2
+                            start_z = (xyz - true_shape[2]) // 2
+                            voxs = np.zeros([new_feature.shape[0], xyz, xyz, xyz, 1], np.float32)
+                            voxs[0:new_feature.shape[0], start_x:start_x + true_shape[0],
+                            start_y:start_y + true_shape[1], start_z:start_z + true_shape[2], 0:1] = new_feature
+                            time_feature = model.predict_on_batch(voxs)
+                            self._data[train_or_test].append((category,time_feature))
+                        else:
+                            self._data[train_or_test].append((category,filename))
         # print(self._data_len)
         #标签制作
         categories = sorted(list(set(c for c, i in self._data['test'])))
@@ -114,12 +138,12 @@ class fMRI_data(object):
         print(categories)
         for k in self._data:
             self._data[k] = [MRI(i, categories[c], c) for c, i in self._data[k]]
-            self._batch_mode='random'
-            self._iters['random'][k] = iter(get_random_iter(k))
+            # self._batch_mode='random'
+            self._iters['random'][k] = iter(get_random_iter(k,'random'))
             #数据种类
             for x in self._data_type:
-                self._batch_mode='oversampling'
-                self._iters['oversampling'][k][x] = iter(get_random_iter(k,x))
+                # self._batch_mode='oversampling'
+                self._iters['oversampling'][k][x] = iter(get_random_iter(k,'oversampling',x))
         self.categories = categories.keys()
         print(str(self._data_type) + 'database setup complete!')
 
@@ -155,10 +179,13 @@ class fMRI_data(object):
         return len(self._data[self._mode])
 
     def get_fmri_brain(self,cut_shape,batch_size,time_dim):
-        shape=[batch_size*time_dim]
+        xyz = 32 #x,y,z大小
+        shape=[batch_size*time_dim,xyz,xyz,xyz,1] #输入的形状大小
+        true_shape = [] #实际大小
         for x in range(0,len(cut_shape),2):
-            shape.append(cut_shape[x + 1] - cut_shape[x] + 1)
-        shape.append(1)
+            true_shape.append(cut_shape[x + 1] - cut_shape[x] + 1)
+        if self._batch_mode == 'random':
+            shape[0] = shape[0] * 4
         voxs = np.zeros(shape,dtype=np.float32)
         one_hots = np.zeros([batch_size,self.num_categories],dtype=np.float32)
         data = self._data[self._mode]
@@ -177,10 +204,22 @@ class fMRI_data(object):
                         print(img.shape)
                     new_feature = img[0:min(time_dim,img.shape[0]), cut_shape[0]:cut_shape[1] + 1, cut_shape[2]:cut_shape[3] + 1,
                                   cut_shape[4]:cut_shape[5] + 1]
+                    #数据归一化
+                    min_vox = np.min(new_feature)
+                    max_vox = np.max(new_feature)
+                    new_feature = (new_feature - min_vox)/(max_vox - min_vox)
                     # 调整形状,形状为[80,mri维度，1]
-                    new_shape = [min(time_dim,img.shape[0]), shape[1], shape[2], shape[3], 1]
+                    new_shape = [min(time_dim,img.shape[0]), true_shape[0], true_shape[1], true_shape[2], 1]
                     new_feature = np.reshape(new_feature, new_shape)
-                    voxs[total:total + min(time_dim,img.shape[0])] = new_feature
+                    #数据增强
+                    axis = np.random.choice([0,1,2,3],1)
+                    if axis[0] > 0:
+                        new_feature = np.flip(new_feature,axis=axis[0])
+                    start_t = (time_dim - new_shape[0])//2
+                    start_x = (xyz - true_shape[0])//2
+                    start_y = (xyz - true_shape[1])//2
+                    start_z = (xyz - true_shape[2])//2
+                    voxs[total+start_t:total + start_t + new_shape[0],start_x:start_x+true_shape[0],start_y:start_y+true_shape[1],start_z:start_z+true_shape[2],0:1] = new_feature
                     one_hots[int(total/time_dim), data[index].label] = 1
                     total = total + time_dim
                     if self._varbass:
@@ -198,15 +237,110 @@ class fMRI_data(object):
                               cut_shape[2]:cut_shape[3] + 1,
                               cut_shape[4]:cut_shape[5] + 1]
                 # 调整形状
-                new_shape = [min(time_dim, img.shape[0]), shape[1], shape[2], shape[3], 1]
+                new_shape = [min(time_dim,img.shape[0]), true_shape[0], true_shape[1], true_shape[2], 1]
                 new_feature = np.reshape(new_feature, new_shape)
-                voxs[total:total + min(time_dim,img.shape[0])] = new_feature
-                one_hots[bs, data[index].label] = 1
+                # 数据归一化
+                min_vox = np.min(new_feature)
+                max_vox = np.max(new_feature)
+                new_feature = (new_feature - min_vox) / (max_vox - min_vox)
+                start_t = (time_dim - new_shape[0]) // 2
+                start_x = (xyz - true_shape[0]) // 2
+                start_y = (xyz - true_shape[1]) // 2
+                start_z = (xyz - true_shape[2]) // 2
+                voxs[total + start_t:total +start_t+ new_shape[0], start_x:start_x + true_shape[0],
+                start_y:start_y + true_shape[1], start_z:start_z + true_shape[2], 0:1] = new_feature
                 total = total + time_dim
+                for replace in range(3):
+                    flip_feature = np.flip(new_feature,axis=replace+1)
+                    voxs[total + start_t:total + start_t + new_shape[0], start_x:start_x + true_shape[0],start_y:start_y + true_shape[1], start_z:start_z + true_shape[2], 0:1] = flip_feature
+                    total = total + time_dim
+                one_hots[bs, data[index].label] = 1
                 if self._varbass:
                     print(total)
-        # print(one_hots[0:total])
-        return voxs[0:total],one_hots[0:total]
+        # print(one_hots)
+        return voxs[0:total],one_hots
+
+    def get_smri_batch(self,cut_shape,batch_size,_batch_mode=None,_mode = None):
+        xyz = 32  # x,y,z大小
+        shape = [batch_size,xyz, xyz, xyz, 1]  # 输入的形状大小
+        true_shape = []  # 实际大小
+        # flag = 0
+        for x in range(0, len(cut_shape), 2):
+            true_shape.append(cut_shape[x + 1] - cut_shape[x] + 1)
+        if _batch_mode == None:
+            _batch_mode = self._batch_mode
+        if _mode == None:
+            _mode = self._mode
+        if _mode == 'test':
+            _iter = iter(self.data_iter('test')).__next__
+        # if self._batch_mode == 'random':
+        #     shape[0] = shape[0] * 4
+        while 1:
+            voxs = np.zeros(shape, dtype=np.float32)
+            one_hots = np.zeros([batch_size, self.num_categories], dtype=np.float32)
+            data = self._data[_mode]
+            total = 0
+            self._batch_mode = _batch_mode
+            self._mode = _mode
+            # 获取两个不同的样本
+            if _batch_mode == 'oversampling':
+                # 当取样模式为过取样时,batch_size表示每一个样本取样的个数
+                for i in self._data_type:
+                    for j in range(batch_size // 2):
+                        index = self._iters[_batch_mode][_mode][i].__next__()
+                        # 加载图片
+                        img = np.load(data[index]._fi)
+                        # if flag == 0:
+                        #     flag = 1
+                        #     print(np.max(img) - np.min(img))
+                        # img = img.get_fdata()
+                        # img = np.transpose(img, [3, 0, 1, 2])
+                        if self._varbass:
+                            print(img.shape)
+                        new_feature = img[cut_shape[0]:cut_shape[1] + 1,
+                                      cut_shape[2]:cut_shape[3] + 1,
+                                      cut_shape[4]:cut_shape[5] + 1]
+                        new_shape = [true_shape[0], true_shape[1], true_shape[2], 1]
+                        new_feature = np.reshape(new_feature, new_shape)
+                        # # 数据增强
+                        # axis = np.random.choice([0, 1, 2, 3], 1)
+                        # if axis[0] > 0:
+                        #     new_feature = np.flip(new_feature, axis=axis[0])
+                        start_x = (xyz - true_shape[0]) // 2
+                        start_y = (xyz - true_shape[1]) // 2
+                        start_z = (xyz - true_shape[2]) // 2
+                        voxs[total][start_x:start_x + true_shape[0],
+                        start_y:start_y + true_shape[1], start_z:start_z + true_shape[2], 0:1] = new_feature
+                        one_hots[total][data[index].label] = 1
+                        total += 1
+                        if self._varbass:
+                            print(total)
+            if _batch_mode == 'random':
+                for bs in range(batch_size):
+                    index = self._iters[_batch_mode][_mode].__next__()
+                    # 加载图片
+                    img = np.load(data[index]._fi)
+                    # img = img.get_fdata()
+                    # img = np.transpose(img, [3, 0, 1, 2])
+                    if self._varbass:
+                        print(img.shape)
+                    new_feature = img[cut_shape[0]:cut_shape[1] + 1,
+                                  cut_shape[2]:cut_shape[3] + 1,
+                                  cut_shape[4]:cut_shape[5] + 1]
+                    # 调整形状
+                    new_shape = [true_shape[0], true_shape[1], true_shape[2], 1]
+                    new_feature = np.reshape(new_feature, new_shape)
+                    start_x = (xyz - true_shape[0]) // 2
+                    start_y = (xyz - true_shape[1]) // 2
+                    start_z = (xyz - true_shape[2]) // 2
+                    voxs[total][start_x:start_x + true_shape[0],
+                    start_y:start_y + true_shape[1], start_z:start_z + true_shape[2], 0:1] = new_feature
+                    total = total + 1
+                    one_hots[bs, data[index].label] = 1
+                    if self._varbass:
+                        print(total)
+            # print(one_hots)
+            yield voxs, one_hots
 
 
     def get_batch(self, batch_size=None):
@@ -260,67 +394,129 @@ class fMRI_data(object):
             print(one_hots)
         return voxs, one_hots
 
+    def data_iter(self,mode):
+        while 1:
+            for i in range(len(self._data[mode])):
+                yield  i
+
+    def get_fmri(self,mode):
+        generator = iter(self.data_iter(mode)).__next__
+        data = self._data[mode]
+        while 1:
+            index = generator()
+            fmri = np.load(data[index]._fi)
+            label = data[index].label
+            yield fmri,label,data[index]._fi
+
     #fmri经过voxnet获取时间序列
-    def get_time_batch(self,sess,voxnet,cut_shape,time_dim=40,batch_size=None):
+    def get_time_batch(self,model,Graph,cut_shape,time_dim=40,batch_size=None,_batch_mode=None,_mode = None,flag = 0):
         # voxnet模型设置
-        p = dict()
-        p['output'] = voxnet['gap']
-        p['output'] = tf.reshape(p['output'], [-1, 128])
-        shape = [time_dim]
+        xyz = 32
+        # p = dict()
+        # p['output'] = voxnet['fc4']
+        # p['output'] = tf.reshape(p['output'], [-1, 50])
+        true_shape = []
         for x in range(0, len(cut_shape), 2):
-            shape.append(cut_shape[x + 1] - cut_shape[x] + 1)
-        shape.append(1)
-        time_serial = np.zeros([batch_size,time_dim,128], dtype=np.float32)
-        one_hots = np.zeros([batch_size, self.num_categories], dtype=np.float32)
-        data = self._data[self._mode]
-        total = 0
-        # 获取两种不同的样本
-        if self._batch_mode == 'oversampling':
-            # 当取样模式为过取样时,batch_size表示每一个样本取样的个数
-            for i in self._data_type:
-                for j in range(batch_size // 2):
-                    index = self._iters[self._batch_mode][self._mode][i].__next__()
+            true_shape.append(cut_shape[x + 1] - cut_shape[x] + 1)
+        # shape.append(1)
+        if _batch_mode == None:
+            _batch_mode = self._batch_mode
+        if _mode == None:
+            _mode = self._mode
+        if flag == 1:
+            _iter = iter(self.data_iter(_mode)).__next__
+        while 1:
+            self._batch_mode = _batch_mode
+            self._mode = _mode
+            # print(_batch_mode, _mode, self._batch_mode, self._mode)
+            time_serial = np.ones([batch_size,time_dim,100], dtype=np.float32)
+            time_serial = time_serial * -1
+            one_hots = np.zeros([batch_size, self.num_categories], dtype=np.float32)
+            data = self._data[_mode]
+            total = 0
+
+            # 获取两种不同的样本
+            if _batch_mode == 'oversampling':
+                # 当取样模式为过取样时,batch_size表示每一个样本取样的个数
+                # print('\n',_batch_mode,_mode)
+                for i in self._data_type:
+                    for j in range(batch_size // 2):
+                        index = self._iters[_batch_mode][_mode][i].__next__()
+                        # 加载图片
+                        # img = np.load(data[index]._fi)
+                        # img = img.get_fdata()
+                        # img = np.transpose(img, [3, 0, 1, 2])
+                        # if self._varbass:
+                        #     print(img.shape)
+                        #
+                        # new_feature = img[0:min(time_dim, img.shape[0]), cut_shape[0]:cut_shape[1] + 1,
+                        #               cut_shape[2]:cut_shape[3] + 1,
+                        #               cut_shape[4]:cut_shape[5] + 1]
+                        # # 调整形状
+                        # new_shape = [new_feature.shape[0],true_shape[0], true_shape[1],true_shape[2], 1]
+                        # new_feature = np.reshape(new_feature, new_shape)
+                        # start_t = (time_dim - new_feature.shape[0]) // 2
+                        # start_x = (xyz - true_shape[0]) // 2
+                        # start_y = (xyz - true_shape[1]) // 2
+                        # start_z = (xyz - true_shape[2]) // 2
+                        # voxs = np.zeros([new_feature.shape[0],xyz,xyz,xyz,1],np.float32)
+                        # voxs[0:new_feature.shape[0],start_x:start_x + true_shape[0], start_y:start_y + true_shape[1], start_z:start_z + true_shape[2], 0:1] = new_feature
+                        # # 调整形状,形状为[80,mri维度，1]
+                        # # new_shape = [min(time_dim, img.shape[0]), shape[1], shape[2], shape[3], 1]
+                        # # new_feature = np.reshape(new_feature, new_shape)
+                        # xx = 0
+                        # time_feature = model.predict_on_batch(voxs)
+                            # print(tf.get_default_graph())
+                        # time_feature = sess.run(p['output'], feed_dict={voxnet[0]: voxs,voxnet.keep_prob:1.0,voxnet.training:False})
+                        new_feature = data[index]._fi
+                        new_feature = new_feature[0:min(time_dim,new_feature.shape[0])]
+                        start_t = (time_dim - new_feature.shape[0]) // 2
+                        time_serial[total][start_t:start_t+new_feature.shape[0]]=time_feature
+                        one_hots[total, data[index].label] = 1
+                        total = total + 1
+                        if self._varbass:
+                            print(total)
+            if _batch_mode == 'random':
+                for bs in range(batch_size):
+                    # if flag == 0:
+                    index = self._iters[_batch_mode][_mode].__next__()
+                    if flag == 1:
+                        index = _iter()
+                    # print(index)
+                    # print('\n',_batch_mode,_mode)
                     # 加载图片
-                    img = nib.load(data[index]._fi)
-                    img = img.get_fdata()
-                    img = np.transpose(img, [3, 0, 1, 2])
+                    img = np.load(data[index]._fi)
+                    # img = img.get_fdata()
+                    # img = np.transpose(img, [3, 0, 1, 2])
                     if self._varbass:
                         print(img.shape)
                     new_feature = img[0:min(time_dim, img.shape[0]), cut_shape[0]:cut_shape[1] + 1,
                                   cut_shape[2]:cut_shape[3] + 1,
                                   cut_shape[4]:cut_shape[5] + 1]
-                    # 调整形状,形状为[80,mri维度，1]
-                    new_shape = [min(time_dim, img.shape[0]), shape[1], shape[2], shape[3], 1]
+                    # 调整形状
+                    new_shape = [new_feature.shape[0], true_shape[0], true_shape[1], true_shape[2], 1]
                     new_feature = np.reshape(new_feature, new_shape)
-                    time_feature = sess.run(p['output'], feed_dict={voxnet[0]: new_feature})
-                    time_serial[total][0:new_feature.shape[0]]=time_feature
+                    #计算图像的坐标开始位置
+                    start_t = (time_dim - new_feature.shape[0]) // 2
+                    start_x = (xyz - true_shape[0]) // 2
+                    start_y = (xyz - true_shape[1]) // 2
+                    start_z = (xyz - true_shape[2]) // 2
+                    voxs = np.zeros([new_feature.shape[0], xyz, xyz, xyz,1], np.float32)
+                    voxs[0:new_feature.shape[0], start_x:start_x + true_shape[0],
+                    start_y:start_y + true_shape[1], start_z:start_z + true_shape[2], 0:1] = new_feature
+                    # 调整形状,形状为[80,mri维度，1]
+                    # new_shape = [min(time_dim, img.shape[0]), shape[1], shape[2], shape[3], 1]
+                    # new_feature = np.reshape(new_feature, new_shape)
+                    # time_feature = sess.run(p['output'], feed_dict={voxnet[0]: voxs,voxnet.keep_prob:1.0,voxnet.training:False})
+                    # with Graph[0].as_default():
+                    time_feature = model.predict_on_batch(voxs)
+                    time_serial[total][start_t:start_t + new_feature.shape[0]] = time_feature
                     one_hots[total, data[index].label] = 1
                     total = total + 1
                     if self._varbass:
                         print(total)
-        if self._batch_mode == 'random':
-            for bs in range(batch_size):
-                index = self._iters[self._batch_mode][self._mode].__next__()
-                # 加载图片
-                img = nib.load(data[index]._fi)
-                img = img.get_fdata()
-                img = np.transpose(img, [3, 0, 1, 2])
-                if self._varbass:
-                    print(img.shape)
-                new_feature = img[0:min(time_dim, img.shape[0]), cut_shape[0]:cut_shape[1] + 1,
-                              cut_shape[2]:cut_shape[3] + 1,
-                              cut_shape[4]:cut_shape[5] + 1]
-                # 调整形状
-                new_shape = [min(time_dim, img.shape[0]), shape[1], shape[2], shape[3], 1]
-                new_feature = np.reshape(new_feature, new_shape)
-                time_feature = sess.run(p['output'], feed_dict={voxnet[0]: new_feature})
-                time_serial[total][0:new_feature.shape[0]] = time_feature
-                one_hots[total, data[index].label] = 1
-                total = total + 1
-                if self._varbass:
-                    print(total)
-        # print(one_hots[0:total])
-        return time_serial, one_hots
+            # print(one_hots[0:total])
+            yield time_serial, one_hots
 
     #获取时间片
     def get_time_stamp(self,time_len,time_dim):
@@ -362,33 +558,51 @@ class fMRI_data(object):
 
     #获取脑区原始体素
     def get_brain_batch(self,mask,batch_size = None,time_dim = 40,feature_index = []):
-        bs = batch_size if batch_size is not None else self._batch_size
-        bs = bs if bs is not None else 8
+        bs = batch_size
         #特征长度
         #每一个特征的长度的前缀和
         One_len = [0]
         for i in feature_index:
             One_len.append(One_len[-1] + len(np.where(mask == i)[0]))
-
-        time_serial = np.zeros([bs, time_dim, One_len[-1]],dtype=np.float32)
+        time_serial = np.zeros([bs, time_dim, 25],dtype=np.float32)
         one_hots = np.zeros([bs, self.num_categories], dtype=np.float32)
         data = self._data[self._mode]
-        next_int = self._iters[self._mode].__next__
-        for bi in range(bs):
-            index = next_int()
-            v = data[index]
-            # 加载图片
-            img_data = nib.load(v._fi)
-            img_data = img_data.get_fdata()
-            img_data = np.transpose(img_data,[3,0,1,2])
-            #时间点选择
-            time_stamp = img_data[self.get_time_stamp(img_data.shape[0],time_dim)]
-            #构造特征矩阵
-            for f_index,feature in enumerate(feature_index):
-                tmp = np.where(mask == feature)
-                new_feature = time_stamp[:,tmp[0],tmp[1],tmp[2]]
-                time_serial[bi][:,One_len[f_index]:One_len[f_index+1]] = new_feature
-            one_hots[bi][v.label] = 1
+        bi = 0
+        if self._batch_mode == 'oversampling':
+            # 当取样模式为过取样时,batch_size表示每一个样本取样的个数
+            for i in self._data_type:
+                for j in range(batch_size // 2):
+                    index = self._iters[self._batch_mode][self._mode][i].__next__()
+                    # 加载图片
+                    img_data = np.load(data[index]._fi)
+                    # img = img.get_fdata()
+                    # img = np.transpose(img, [3, 0, 1, 2])
+                    # 时间点选择
+                    time_stamp = img_data[0:min(img_data.shape[0],time_dim)]
+                    # print(time_stamp.shape)
+                    start_t = (time_dim - time_stamp.shape[0]) // 2
+                    # 构造特征矩阵
+                    # for f_index, feature in enumerate(feature_index):
+                    #     tmp = np.where(mask == feature)
+                    #     new_feature = time_stamp[:, tmp[0], tmp[1], tmp[2]]
+                    time_serial[bi][start_t:start_t+time_stamp.shape[0]] = time_stamp[:,25:50]
+                    one_hots[bi][data[index].label] = 1
+                    bi += 1
+
+        if self._batch_mode == 'random':
+            for bs in range(batch_size):
+                index = self._iters[self._batch_mode][self._mode].__next__()
+                # 加载图片
+                img_data = np.load(data[index]._fi)
+                # img = img.get_fdata()
+                # img = np.transpose(img, [3, 0, 1, 2])
+                # 时间点选择
+                time_stamp = img_data[0:min(img_data.shape[0], time_dim)]
+                start_t = (time_dim - time_stamp.shape[0]) // 2
+                # 构造特征矩阵
+                time_serial[bi][start_t:start_t + time_stamp.shape[0]] = time_stamp[:,25:50]
+                one_hots[bi][data[index].label] = 1
+                bi += 1
         return time_serial, one_hots
 
     #获取截断后的sMRI

@@ -4,7 +4,8 @@ from fmri_data import fMRI_data
 from config import cfg
 from evaluation import evaluation
 import nibabel as nib
-def main(data_index=None,brain_map=None,cut_shape=None,data_type=['MCIc','MCInc'],pre_dir='/home/anzeng/rhb/fmri_data', num_batches = 512*5+1,test_size=6):
+import time
+def main(cross_epoch = 0,data_index=None,brain_map=None,cut_shape=None,data_type=['MCIc','MCInc'],pre_dir='/home/anzeng/rhb/fmri_data', num_batches = 512*5+1,test_size=6):
     tf.reset_default_graph()
 
     if cut_shape == None:
@@ -20,13 +21,9 @@ def main(data_index=None,brain_map=None,cut_shape=None,data_type=['MCIc','MCInc'
                 cut_shape[2 * i + 1] = max(cut_shape[2 * i+1], np.max(tmp[i]))
         print(cut_shape)
 
+    xyz = 32
     dataset = fMRI_data(data_type, data_index=data_index,dir=pre_dir, batch_mode='random', varbass=cfg.varbass)
-    input_shape=[None]
-    for i in range(3):
-        input_shape.append(cut_shape[2*i+1]+1-cut_shape[2*i])
-    input_shape.append(1)
-    print(input_shape)
-    voxnet = VoxNet(input_shape=input_shape,voxnet_type='cut')
+    voxnet = VoxNet(input_shape=[None,xyz,xyz,xyz,1],voxnet_type='cut')
 
     #数据权值
     data_value=[[1],[1]]
@@ -42,6 +39,7 @@ def main(data_index=None,brain_map=None,cut_shape=None,data_type=['MCIc','MCInc'
     p['x_loss'] = tf.multiply(p['Weight'], p['cross_loss'])
     p['loss'] = tf.reduce_mean(p['x_loss'])
     p['l2_loss'] = tf.add_n([tf.nn.l2_loss(w) for w in voxnet.kernels])
+    p['loss'] = p['loss'] + 0.0001 * p['l2_loss']
 
     p['prediction'] = tf.argmax(voxnet[-1], 1)
     p['y_true'] = tf.argmax(p['labels'], 1)
@@ -54,9 +52,9 @@ def main(data_index=None,brain_map=None,cut_shape=None,data_type=['MCIc','MCInc'
     p['weights_decay'] = tf.train.GradientDescentOptimizer(p['learning_rate']).minimize(p['l2_loss'])
 
     # Hyperparameters
-    batch_size = 2
+    batch_size = 50
 
-    initial_learning_rate = 0.01
+    initial_learning_rate = 0.0001
     min_learning_rate = 0.00001
     learning_rate_decay_limit = 0.0001
 
@@ -68,6 +66,8 @@ def main(data_index=None,brain_map=None,cut_shape=None,data_type=['MCIc','MCInc'
     learning_step = 0
     min_loss = 1e308
 
+    wait = 0
+    paitence = 10
     accuracy_filename = os.path.join(cfg.voxnet_checkpoint_dir,'accuracies.txt')
     if not os.path.isdir(cfg.voxnet_checkpoint_dir):
         os.mkdir(cfg.voxnet_checkpoint_dir)
@@ -82,16 +82,17 @@ def main(data_index=None,brain_map=None,cut_shape=None,data_type=['MCIc','MCInc'
             voxnet.npz_saver.restore(session,cfg.voxnet_checkpoint)
         for batch_index in range(num_batches):
 
-            learning_rate = max(min_learning_rate,
-                                initial_learning_rate * 0.8 ** (learning_step / learning_decay))
+            # learning_rate = max(min_learning_rate,
+            #                     initial_learning_rate * 0.8 ** (learning_step / learning_decay))
+            learning_rate = 0.0001
             learning_step += 1
 
-            if batch_index > weights_decay_after and batch_index % 256 == 0:
-                session.run(p['weights_decay'], feed_dict=feed_dict)
+            # if batch_index > weights_decay_after and batch_index % 256 == 0:
+            #     session.run(p['weights_decay'], feed_dict=feed_dict)
 
-            voxs, labels = dataset.train.oversampling.get_small_brain(cut_shape,batch_size)
-            feed_dict = {voxnet[0]: voxs, p['labels']: labels,
-                         p['learning_rate']: learning_rate, voxnet.training: True,p['data_value']:data_value}
+            voxs, labels = dataset.train.oversampling.get_smri_batch(cut_shape,batch_size)
+            feed_dict = {voxnet[0]: voxs, p['labels']: labels,voxnet.keep_prob:0.3,
+                         p['learning_rate']: learning_rate, voxnet.training: True,p['data_value']:data_value,}
 
             session.run(p['train'], feed_dict=feed_dict)
 
@@ -113,33 +114,59 @@ def main(data_index=None,brain_map=None,cut_shape=None,data_type=['MCIc','MCInc'
 
             if batch_index and batch_index % 128 == 0:
                 num_accuracy_batches = 30
-                total_accuracy = 0
+                # train_accuracy = 0
+                training_evaluation = evaluation()
                 for x in range(num_accuracy_batches):
-                    voxs, labels = dataset.train.random_sampling.get_small_brain(cut_shape,2)
-                    feed_dict = {voxnet[0]: voxs, p['labels']: labels, voxnet.training: False}
-                    total_accuracy += session.run(p['accuracy'], feed_dict=feed_dict)
-                training_accuracy = total_accuracy / num_accuracy_batches
-                print('training accuracy: {}'.format(training_accuracy))
-                num_accuracy_batches = test_size
-                total_evaluation = evaluation()
-                for x in range(num_accuracy_batches):
-                    voxs, labels = dataset.test.random_sampling.get_small_brain(cut_shape,1)
-                    feed_dict = {voxnet[0]: voxs,  p['labels']: labels, voxnet.training: False}
+                    voxs, labels = dataset.train.random_sampling.get_smri_batch(cut_shape,batch_size)
+                    feed_dict = {voxnet[0]: voxs, p['labels']: labels, voxnet.training: False,voxnet.keep_prob:1.0}
+                    start_time = time.time()
                     predictions, y_true = session.run([p['prediction'], p['y_true']], feed_dict=feed_dict)
-                    total_evaluation += evaluation(y_true=y_true, y_predict=predictions)
+                    training_evaluation += evaluation(y_true=y_true,y_predict=predictions)
+                    end_time =time.time()
+                    print('total time: %f'%((end_time - start_time) / 60))
+                    print(training_evaluation)
+                # training_accuracy = total_accuracy / num_accuracy_batgetches
+                print('training accuracy \n' + str(training_evaluation))
+                num_accuracy_batches = test_size
+                test_evaluation = evaluation()
+                for x in range(num_accuracy_batches):
+                    voxs, labels = dataset.test.random_sampling.get_smri_batch(cut_shape,batch_size)
+                    feed_dict = {voxnet[0]: voxs,  p['labels']: labels, voxnet.training: False,voxnet.keep_prob:1.0}
+                    predictions, y_true = session.run([p['prediction'], p['y_true']], feed_dict=feed_dict)
+                    test_evaluation += evaluation(y_true=y_true, y_predict=predictions)
                     # print(y_true, predictions)
-                    print(total_evaluation)
-                print('test accuracy \n' + str(total_evaluation))
+                    print(test_evaluation)
+                print('test accuracy \n' + str(test_evaluation))
                 with open(accuracy_filename, 'a') as f:
-                    f.write(' '.join(map(str, (checkpoint_num, training_accuracy, total_evaluation))) + '\n')
-                if batch_index % 1024 == 0:
-                    print('saving checkpoint {}...'.format(checkpoint_num))
-                    filename = 'cx-{}.npz'.format(checkpoint_num)
-                    filename = os.path.join(cfg.voxnet_checkpoint_dir,filename)
-                    voxnet.npz_saver.save(session, filename)
-                    print('checkpoint saved!')
-                    checkpoint_num += 1
+                    f.write(str(checkpoint_num) + ':\n')
+                    f.write(str(training_evaluation) + '\n')
+                    f.write(str(test_evaluation) + '\n')
+
+                if training_evaluation.ACC >= 0.95:
+                    wait += 1
+                    if wait >= paitence:
+                        filename = 'cx-{}.npz'.format(cross_epoch)
+                        filename = os.path.join(cfg.voxnet_checkpoint_dir, filename)
+                        voxnet.npz_saver.save(session, filename)
+                        print('checkpoint saved!')
+                        return filename
+                else:
+                    wait = 0
+                # if batch_index % 1024 == 0 or training_evaluation.ACC >= 0.9:
+                #     print('saving checkpoint {}...'.format(checkpoint_num))
+                #     filename = 'cx-{}.npz'.format(checkpoint_num)
+                #     filename = os.path.join(cfg.voxnet_checkpoint_dir,filename)
+                #     voxnet.npz_saver.save(session, filename)
+                #     print('checkpoint saved!')
+                #     checkpoint_num += 1
+                #     if training_evaluation.ACC >= 0.9:
+                #         break
+        filename = 'cx-{}.npz'.format(cross_epoch)
+        filename = os.path.join(cfg.voxnet_checkpoint_dir, filename)
+        voxnet.npz_saver.save(session, filename)
+        print('checkpoint saved!')
     return filename
+
 
 if __name__ == '__main__':
     tf.app.run()

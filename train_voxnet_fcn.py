@@ -7,18 +7,23 @@ import time
 from evaluation import *
 import nibabel as nib
 import toolbox
+import train_246_fcn
 import train_fcn
 import train_cut
-
+import shutil
+import convert
+import keras_model
+import smri_ensemble
 os.environ['CUDA_DEVICE_ORDER']='PCI_BUS_ID'
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 def syn_train(*argv):
 
+    input_weight = [2,1,1,1]
     data_value = [[1.0],[1.0]]
     time_dim = 80  # 挑选时间片个数
     batch_size = 8
 
-    brain_map = [217]
+    brain_map = [217,218,219]
     cut_shape = [100, 0, 100, 0, 100, 0]
     mask = nib.load('/home/anzeng/rhb/fmri/fMRI-deeping-learning/BN_Atlas_246_3mm.nii')
     mask = mask.get_fdata()
@@ -28,16 +33,16 @@ def syn_train(*argv):
         for i in range(3):
             cut_shape[2 * i] = min(cut_shape[2 * i], np.min(tmp[i]))
             cut_shape[2 * i + 1] = max(cut_shape[2 * i + 1], np.max(tmp[i]))
-    print(cut_shape)
+    print(brain_map,cut_shape)
 
     dataset = fMRI_data(['AD', 'NC'], dir='/home/anzeng/rhb/fmri_data', batch_mode='random', varbass=cfg.varbass)
-    input_shape = [time_dim*batch_size]
-    for i in range(3):
-        input_shape.append(cut_shape[2 * i + 1] + 1 - cut_shape[2 * i])
-    input_shape.append(1)
+    input_shape = [None,32,32,32,1]
+    # for i in range(3):
+    #     input_shape.append(cut_shape[2 * i + 1] + 1 - cut_shape[2 * i])
+    # input_shape.append(1)
     print(input_shape)
     # input_shape=[40,2,2,2,1]
-    voxnet = VoxNet(input_shape=input_shape, voxnet_type='cut')
+    voxnet = VoxNet(input_shape=input_shape, voxnet_type='all_conv')
     FCN_input = tf.reshape(voxnet['gap'],(-1,time_dim,128))
     print(FCN_input)
     FCNs = Classifier_FCN(FCN_input,nb_classes=2)
@@ -46,6 +51,8 @@ def syn_train(*argv):
 
     p['labels'] = tf.placeholder(tf.float32, [None, 2])
     p['data_value'] = tf.placeholder(tf.float32, [2, 1])
+    p['input_pw'] = tf.placeholder(tf.float32,[None]) #预测权值
+
 
     p['Weight'] = tf.matmul(p['labels'], p['data_value'])
     p['cross_loss'] = tf.nn.softmax_cross_entropy_with_logits(logits=FCNs[-2], labels=p['labels'])
@@ -54,10 +61,20 @@ def syn_train(*argv):
     p['loss'] = tf.reduce_mean(p['x_loss'])
     p['l2_loss'] = tf.add_n([tf.nn.l2_loss(w) for w in FCNs.kernels])
 
+    # 预测时进行集成
+    p['p_w'] = tf.reshape(p['input_pw'], [-1, 1])
+    p['sum_w'] = tf.reduce_sum(p['p_w'])
+    p['test_prediction'] = tf.cast(tf.argmax(FCNs[-1],1),tf.float32)
+    p['test_prediction'] = tf.reshape(p['test_prediction'], [-1, 4])
+    p['test_prediction'] = tf.matmul(p['test_prediction'], p['p_w'])
+    p['test_prediction'] = tf.round(tf.divide(p['test_prediction'], p['sum_w']))
+
     p['prediction'] = tf.argmax(FCNs[-1],1)
     p['y_true'] = tf.argmax(p['labels'],1)
     p['correct_prediction'] = tf.equal(p['prediction'], p['y_true'])
     p['accuracy'] = tf.reduce_mean(tf.cast(p['correct_prediction'], tf.float32))
+
+
 
     p['learning_rate'] = tf.placeholder(tf.float32)
     with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
@@ -77,21 +94,24 @@ def syn_train(*argv):
     learning_decay = 10 * num_batches_per_epoch
     weights_decay_after = 5 * num_batches_per_epoch
 
-    checkpoint_num = 0
+    checkpoint_num = cfg.checkpoint_start_num
     learning_step = 0
     min_loss = 1e308
 
-    accuracy_filename = os.path.join(cfg.checkpoint_dir, 'accuracies.txt')
-    if not os.path.isdir(cfg.checkpoint_dir):
-        os.mkdir(cfg.checkpoint_dir)
+    accuracy_filename = os.path.join(cfg.fcn_checkpoint_dir, 'accuracies.txt')
+    if not os.path.isdir(cfg.fcn_checkpoint_dir):
+        os.mkdir(cfg.fcn_checkpoint_dir)
 
     if not os.path.exists(accuracy_filename):
         with open(accuracy_filename, 'a') as f:
             f.write('')
-
+    with open(accuracy_filename,'a') as f:
+        f.write(str(brain_map)+'\n')
     with tf.Session() as session:
         session.run(tf.global_variables_initializer())
-        # voxnet.npz_saver.restore(session, cfg.voxnet_checkpoint_dir)
+        if cfg.istraining:
+            voxnet.npz_saver.restore(session, cfg.voxnet_checkpoint)
+            FCNs.npz_saver.restore(session,cfg.fcn_checkpoint)
         #voxnet赋值
         for batch_index in range(num_batches):
             start = time.time()
@@ -132,33 +152,36 @@ def syn_train(*argv):
                 min_loss = min(loss, min_loss)
 
             if batch_index and batch_index % 16 == 0:
-                num_accuracy_batches = 10
-                total_accuracy = 0
+                num_accuracy_batches = 20
+                train_evaluation = evaluation()
                 for x in range(num_accuracy_batches):
-                    voxs, labels = dataset.train.random_sampling.get_fmri_brain(cut_shape, batch_size, time_dim)
-                    feed_dict = {voxnet[0]:voxs,p['labels']: labels, FCNs.training: False,voxnet.training:False}
-                    total_accuracy += session.run(p['accuracy'], feed_dict=feed_dict)
-                training_accuracy = total_accuracy / num_accuracy_batches
-                print('training accuracy: {}'.format(training_accuracy))
-                num_accuracy_batches = 15
-                total_evaluation = evaluation()
+                    voxs, labels = dataset.train.random_sampling.get_fmri_brain(cut_shape, 5, time_dim)
+                    feed_dict = {voxnet[0]:voxs,p['labels']: labels, FCNs.training: False,voxnet.training:False,p['input_pw']:input_weight}
+                    predictions, y_true = session.run([p['test_prediction'], p['y_true']], feed_dict=feed_dict)
+                    train_evaluation += evaluation(y_true=y_true, y_predict=predictions)
+                    print(train_evaluation)
+                print('train accuracy \n'+str(train_evaluation))
+                num_accuracy_batches = 27
+                test_evaluation = evaluation()
                 for x in range(num_accuracy_batches):
-                    voxs, labels = dataset.test.random_sampling.get_fmri_brain(cut_shape,batch_size,time_dim)
-                    feed_dict = {voxnet[0]: voxs, p['labels']: labels, FCNs.training: False, voxnet.training: False}
-                    predictions,y_true = session.run([p['prediction'],p['y_true']], feed_dict=feed_dict)
-                    total_evaluation += evaluation(y_true=y_true,y_predict=predictions)
-                    print(total_evaluation)
-                print('test accuracy \n'+str(total_evaluation))
+                    voxs, labels = dataset.test.random_sampling.get_fmri_brain(cut_shape,1,time_dim)
+                    feed_dict = {voxnet[0]: voxs, p['labels']: labels, FCNs.training: False, voxnet.training: False,p['input_pw']:input_weight}
+                    predictions,y_true = session.run([p['test_prediction'],p['y_true']], feed_dict=feed_dict)
+                    test_evaluation += evaluation(y_true=y_true,y_predict=predictions)
+                    print(test_evaluation)
+                print('test accuracy \n'+str(test_evaluation))
                 # fr.write('test accuracy: {}'.format(test_accuracy))
                 with open(accuracy_filename, 'a') as f:
-                    f.write(' '.join(map(str, (checkpoint_num, training_accuracy, total_evaluation))) + '\n')
+                    f.write(str(checkpoint_num) + ':\n')
+                    f.write(str(train_evaluation) + '\n')
+                    f.write(str(test_evaluation) + '\n')
                 if batch_index % 256 == 0:
                     print('saving checkpoint {}...'.format(checkpoint_num))
                     filename = 'voxnet-{}.npz'.format(checkpoint_num)
-                    filename = os.path.join(cfg.checkpoint_dir, filename)
+                    filename = os.path.join(cfg.fcn_checkpoint_dir, filename)
                     voxnet.npz_saver.save(session,filename)
                     filename = 'fcn-{}.npz'.format(checkpoint_num)
-                    filename = os.path.join(cfg.checkpoint_dir, filename)
+                    filename = os.path.join(cfg.fcn_checkpoint_dir, filename)
                     FCNs.npz_saver.save(session, filename)
                     print('checkpoint saved!')
                     checkpoint_num += 1
@@ -167,10 +190,12 @@ def syn_train(*argv):
 
 def train(_):
 
-    brain_map = [217]
+    # brain_map = [117,109,110,215,216,217,218,211,212]
+    brain_map = [217,218,219]
     cut_shape = [100, 0, 100, 0, 100, 0]
     mask = nib.load('/home/anzeng/rhb/fmri/fMRI-deeping-learning/BN_Atlas_246_3mm.nii')
     mask = mask.get_fdata()
+
     # 获取截取的sMRI大小
     for x in brain_map:
         tmp = np.where(mask == x)
@@ -179,19 +204,22 @@ def train(_):
             cut_shape[2 * i + 1] = max(cut_shape[2 * i + 1], np.max(tmp[i]))
     print(cut_shape)
     #样本划分
-    data_type=['MCIc','MCInc']
-    test_len=[2,4]
-    dir = '/home/anzeng/rhb/fmri_data'
-    data_index={}
+    data_type=['AD','NC']
+    test_len=[10,10]
+    dir = '/home/anzeng/rhb/fmri_data/new_fmri'
+    target_sMRI_dir = '/home/anzeng/rhb/generate_sMRI'
     iters={} #迭代器，用于留一测试
-    epoch = 10
+    epoch = 5
     #构造迭代器
     for cnt,i in enumerate(data_type):
         path = os.path.join(dir,i)
         data_len = len(os.listdir(path))
         iters[i]=iter(toolbox.cut_data(data_len,test_len[cnt]))
 
-    accuracy = evaluation()
+    BGRU_ACC = evaluation() #模型
+    BGRU_SVM_ACC = evaluation() #SVM模型
+    ensemble_ACC = evaluation() #集成模型
+    ensemble_SVM_ACC= evaluation() #SVM集成模型
     f = open(cfg.output,'w')
 
     for step in range(epoch):
@@ -206,22 +234,71 @@ def train(_):
             f.write(str(index) + '\n')
             voxnet_data[x]={'train':index['voxnet_train'],'test':index['test']}
             fcn_data[x] = {'train':index['fcn_train'],'test':index['test']}
-        #voxnent训练
+            # fcn_data[x]['train'] = np.hstack((voxnet_data[x]['train'],fcn_data[x]['train']))
+        # 把fmri分过为sMRI
+        print('start separate')
+        start_time = time.time()
+        for d_type in data_type:
+            raw_dir = os.path.join(dir,d_type)
+            class_sMRI_dir = os.path.join(target_sMRI_dir,d_type)
+            if os.path.isdir(class_sMRI_dir):
+                shutil.rmtree(class_sMRI_dir)
+            os.makedirs(class_sMRI_dir)
+            # train_list = voxnet_data[d_type]['train']
+            # test_list = np.hstack((voxnet_data[d_type]['test'] ,fcn_data[d_type]['train']))
+            # for remove in test_list:
+            #     if remove in train_list:
+            #         np.delete(test_list,remove)
+            # train_list = fcn_data[d_type]['train']
+            # test_list = fcn_data[d_type]['test']
+            train_list = voxnet_data[d_type]['train']
+            test_list = list((set(fcn_data[d_type]['train']) - set(voxnet_data[d_type]['train']))| set(fcn_data[d_type]['test']))
+            print(train_list)
+            print(test_list)
+            convert.covert2smri(raw_dir,class_sMRI_dir,train_list,test_list,brain_map,mask)
+            print(d_type+' convert success')
+        end_time = time.time()
+        print('separate success total time:%f'%((end_time-start_time)/60))
+        # voxnent训练
         print('voxnet train start')
-        voxnet_filename = train_cut.main(brain_map=brain_map,data_index=voxnet_data,cut_shape=cut_shape,pre_dir = dir,num_batches=2048* 5+1,test_size=6)
+        # voxnet_filename = train_cut.main(cross_epoch=step,brain_map=brain_map,cut_shape=cut_shape,data_type=data_type,pre_dir = target_sMRI_dir,num_batches= 1024 * 5 + 1,test_size=10)
+        voxnet_filename = keras_model.train_3DCNN(cross_epoch=step, brain_map=brain_map, cut_shape=cut_shape,
+                                         data_type=data_type, pre_dir=target_sMRI_dir, num_batches=1024*10,
+                                         test_size=10)
         print(voxnet_filename)
         print('voxnent train finish')
-        #fcn训练
+        # voxnet_filename = '/home/anzeng/rhb/fmri/ADvsNC_voxnent_checkpoint_4_15/cx-0.npz'
+        # fcn训练
         print('fcn train start')
-        accuracy += train_fcn.main(brain_map=brain_map,data_index=fcn_data,cut_shape=cut_shape,pre_dir=dir,num_batches=256*5+1,voxnet_point=voxnet_filename,test_size=6)
-        print('fcn train finish')
-        #输出测试准确率
-        output = 'iter {}:{}'.format(step,accuracy)
+        # one_accuracy = smri_ensemble.emsemble(cross_epoch=step,brain_map=brain_map,data_type=data_type,data_index = fcn_data,cut_shape=cut_shape,pre_dir=dir,num_batches=128*5+1,voxnet_point=voxnet_filename,test_size=20,f_handle=f)
+        BGRU_ACC_One,BGRU_SVM_ACC_One = keras_model.train_GRUs(cross_epoch=step,brain_map=brain_map,data_type=data_type,data_index = fcn_data,cut_shape=cut_shape,pre_dir=dir,num_batches=128*5,voxnet_point=voxnet_filename,test_size=20,f_handle=f)
+        BGRU_ACC += BGRU_ACC_One
+        # print('BGRU_SVM_ACC')
+        BGRU_SVM_ACC += BGRU_SVM_ACC_One
+        print('ensemble_SVM_ACC')
+        ensemble_SVM_ACC += smri_ensemble.svm_emsemble(cross_epoch=step,brain_map=brain_map,data_type=data_type,data_index = fcn_data,cut_shape=cut_shape,pre_dir=dir,num_batches=128*5+1,voxnet_point=voxnet_filename,test_size=20,f_handle=f)
+        print('ensemble_ACC')
+        ensemble_ACC += smri_ensemble.emsemble(cross_epoch=step,brain_map=brain_map,data_type=data_type,data_index = fcn_data,cut_shape=cut_shape,pre_dir=dir,num_batches=128*5+1,voxnet_point=voxnet_filename,test_size=20,f_handle=f)
+        # accuracy += train_fcn.main(brain_map=brain_map, data_type = data_type,data_index=fcn_data, cut_shape=cut_shape, pre_dir=dir,
+        #                            num_batches=128 * 5 + 1, voxnet_point=voxnet_filename, test_size=20)
+        # train_fcn.main(brain_map=brain_map,cut_shape=cut_shape,pre_dir=dir,data_type=data_type,num_batches=256*5+1,voxnet_point=voxnet_filename,test_size=20)
+        # accuracy += train_246_fcn.main(brain_map=brain_map,data_type=data_type,pre_dir=target_sMRI_dir,num_batches=1024*10+1,test_size=20)
+        # 输出测试准确率
+        # output = 'iter {}:{}'.format(step, one_accuracy)
+        # print(output)
+        # f.write(output + '\n')
+        output = 'iter {}:\n model:{}\n SVM_model:{}\nSVM_ensemble_modle:{}\nensemble_model:{}'.format(step,BGRU_ACC,BGRU_SVM_ACC,ensemble_SVM_ACC,ensemble_ACC)
         print(output)
         f.write(output+'\n')
     f.close()
 
-def test(_):
-    pass
+def xtest(_):
+    train_list = list(range(10))
+    test_list = list(range(20))
+    for remove in test_list:
+        print(remove)
+        if remove in train_list:
+            test_list = np.delete(test_list, remove)
+        print(test_list)
 if __name__ == '__main__':
     tf.app.run(train)

@@ -14,9 +14,15 @@ class evaluation:
                 self.TN += 1
 
     @property
-    def SEN(self):
+    def SEN(self):#敏感性，召回率
         if self.TP:
             return self.TP/(self.TP+self.FN)
+        return 0
+
+    @property
+    def Pre(self): #精确率
+        if self.TP:
+            return self.TP/(self.TP + self.FP)
         return 0
 
     @property
@@ -29,9 +35,16 @@ class evaluation:
     def ACC(self):
         if self.TP or self.TN:
             return (self.TP+self.TN)/(self.TP+self.TN+self.FP+self.FN)
+        return 0
+
+    @property
+    def F1(self): #F1 measure
+        if self.SEN + self.Pre:
+            return 2 * self.SEN * self.Pre / (self.SEN + self.Pre)
+        return 0
 
     def __str__(self):
-        return 'ACC:'+str(self.ACC)+' SEN:'+str(self.SEN)+' SPE:'+str(self.SPE)
+        return 'ACC:'+str(self.ACC)+' SEN:'+str(self.SEN)+' SPE:'+str(self.SPE) + " F1:"+str(self.F1)
 
     def __iadd__(self, b):
         self.TP += b.TP
