@@ -191,9 +191,9 @@ def syn_train(*argv):
 def train(_):
 
     # brain_map = [117,109,110,215,216,217,218,211,212]
-    brain_map = [217,218,219]
+    brain_map = [215,216,217,218]
     cut_shape = [100, 0, 100, 0, 100, 0]
-    mask = nib.load('/home/anzeng/rhb/fmri/fMRI-deeping-learning/BN_Atlas_246_3mm.nii')
+    mask = nib.load('BN_Atlas_246_3mm.nii')
     mask = mask.get_fdata()
 
     # 获取截取的sMRI大小
@@ -263,7 +263,7 @@ def train(_):
         print('voxnet train start')
         # voxnet_filename = train_cut.main(cross_epoch=step,brain_map=brain_map,cut_shape=cut_shape,data_type=data_type,pre_dir = target_sMRI_dir,num_batches= 1024 * 5 + 1,test_size=10)
         voxnet_filename = keras_model.train_3DCNN(cross_epoch=step, brain_map=brain_map, cut_shape=cut_shape,
-                                         data_type=data_type, pre_dir=target_sMRI_dir, num_batches=1024*10,
+                                         data_type=data_type, pre_dir=target_sMRI_dir, num_batches=1024*5,
                                          test_size=10)
         print(voxnet_filename)
         print('voxnent train finish')

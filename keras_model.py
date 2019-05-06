@@ -88,15 +88,15 @@ def GRUs(input_shape=[80,100],nb_class = 2):
     left = GRU(units=80,return_sequences=True,kernel_initializer=keras.initializers.glorot_uniform(seed=None))(b)
     # left = Dropout(0.2,name='BGRU_Dropout_1')(left)
     left = GRU(units=50,return_sequences=True,kernel_initializer=keras.initializers.glorot_uniform(seed=None))(left)
-    left = Dropout(0.8,name='BGRU_Dropout_2')(left)
+    left = Dropout(0.7,name='BGRU_Dropout_2')(left)
     left = GRU(units=25,return_sequences=False,kernel_initializer=keras.initializers.glorot_uniform(seed=None))(left)
     right = GRU(units=80, return_sequences=True,go_backwards=True,kernel_initializer=keras.initializers.glorot_uniform(seed=None),kernel_regularizer=keras.regularizers.l2(0.01))(b)
     # right = Dropout(0.2,name='BGRU_Dropout_3')(right)
     right = GRU(units=50, return_sequences=True,kernel_initializer=keras.initializers.glorot_uniform(seed=None))(right)
-    right = Dropout(0.8,name='BGRU_Dropout_4')(right)
+    right = Dropout(0.7,name='BGRU_Dropout_4')(right)
     right = GRU(units=25, return_sequences=False,kernel_initializer=keras.initializers.glorot_uniform(seed=None))(right)
     fc = concatenate([left,right],axis=-1,name='fc_1')
-    # fc = Activation('relu')(fc)
+    fc = Activation('relu')(fc)
     # fc = Dense(50)(fc)
     # output = Dropout(0.2)(fc)
     output = Dense(nb_class,kernel_initializer=keras.initializers.glorot_uniform(seed=None),name='fc_2',kernel_regularizer=keras.regularizers.l2(0.01))(fc)
@@ -106,7 +106,7 @@ def GRUs(input_shape=[80,100],nb_class = 2):
     model.compile(loss='binary_crossentropy', optimizer='adam',
                   metrics=['accuracy'])
     return model
-# GRUs()
+GRUs()
 def train_fcn(cross_epoch = 0,data_index=None,cut_shape=None,data_type=['MCIc','MCInc'],pre_dir='/home/anzeng/rhb/fmri_data',
          num_batches = 256*5,voxnet_point=None,test_size = 6,brain_map=[217]):
     tf.reset_default_graph()
@@ -123,7 +123,7 @@ def train_fcn(cross_epoch = 0,data_index=None,cut_shape=None,data_type=['MCIc','
         voxnet.npz_saver.restore(session,voxnet_point)
         fcn.fit_generator(dataset.get_time_batch(session,voxnet,cut_shape,time_dim=time_dim,batch_size = batch_size,_batch_mode='oversampling',_mode='train'),steps_per_epoch=8,epochs=num_batches,
                           validation_data=dataset.test.random_sampling.get_time_batch(session,voxnet,cut_shape,time_dim=time_dim,batch_size=1,_batch_mode='random',_mode='test'),validation_steps=test_size,
-                          callbacks=[toolbox.EarlyStoppingByLossVal('loss',0.3,patience=10)])
+                          callbacks=[toolbox.EarlyStoppingByACC('loss',0.3,patience=10)])
         #预测
         data_iter = iter(dataset.test.random_sampling.get_time_batch(session, voxnet, cut_shape, time_dim=time_dim, batch_size=1))
 
@@ -146,13 +146,12 @@ def train_GRUs(cross_epoch = 0,data_index=None,cut_shape=None,data_type=['MCIc',
     #清楚keras后台数据
     keras.backend.clear_session()
     # #####超参##########
-    time_dim = 40
-    batch_size = 20
+    time_dim = 80
+    batch_size = 50
     g1 = tf.Graph()
     g2 = tf.Graph()
+    # keras.optimizers.Adam()
     # #####################
-    grus = GRUs(input_shape=[time_dim,100],nb_class=2)
-    dataset = fMRI_data(data_type, data_index=data_index, varbass=False, dir=pre_dir)
     # #加载模型#
     xyz = 32
     # input_shape = [xyz, xyz, xyz, 1]
@@ -163,10 +162,15 @@ def train_GRUs(cross_epoch = 0,data_index=None,cut_shape=None,data_type=['MCIc',
     # for i in _3D_CNN.layers:
     #     print(i.name)
     layer_name = 'CNN_fc2'
-    feature_generator = keras.Model(inputs=_3D_CNN.layers[0].input,outputs=_3D_CNN.get_layer(layer_name).output)
-    sample = np.zeros([1,xyz,xyz,xyz,1])
-    y = feature_generator.predict_on_batch(sample)
-    print(y)
+    feature_generator = keras.Model(inputs=_3D_CNN.layers[0].input, outputs=_3D_CNN.get_layer(layer_name).output)
+    # sample = np.zeros([1, xyz, xyz, xyz, 1])
+    # y = feature_generator.predict_on_batch(sample)
+    # print(y)
+
+
+
+    dataset = fMRI_data(data_type, data_index=data_index, varbass=False, dir=pre_dir,model=feature_generator,cut_shape=cut_shape)
+    grus = GRUs(input_shape=[time_dim, 100], nb_class=2)
     # feature_generator = keras.Sequential()
     # feature_generator.get_layer()
     # voxnet = VoxNet(input_shape=input_shape, voxnet_type='cut')
@@ -176,15 +180,15 @@ def train_GRUs(cross_epoch = 0,data_index=None,cut_shape=None,data_type=['MCIc',
     logs_path = os.path.join(cfg.fcn_checkpoint_dir, 'train_' + str(cross_epoch))
     if os.path.isdir(logs_path):
         shutil.rmtree(logs_path)
-    grus.fit_generator(dataset.get_time_batch(model = feature_generator,Graph=[g1,g2], cut_shape= cut_shape, time_dim=time_dim, batch_size=batch_size,_batch_mode='oversampling', _mode='train'), steps_per_epoch=8,
+    grus.fit_generator(dataset.get_time_batch(cut_shape= cut_shape, time_dim=time_dim, batch_size=batch_size,_batch_mode='oversampling', _mode='train'), steps_per_epoch=8,
                           epochs=num_batches,
-                          validation_data=dataset.get_time_batch(model = feature_generator,Graph=[g1,g2], cut_shape= cut_shape, time_dim=time_dim, batch_size=1,_batch_mode='random',_mode='test',flag=1),
+                          validation_data=dataset.get_time_batch(cut_shape= cut_shape, time_dim=time_dim, batch_size=1,_batch_mode='random',_mode='test',flag=1),
                           validation_steps=test_size,
-                          callbacks=[toolbox.EarlyStoppingByLossVal('loss', 0.4, patience=10),keras.callbacks.TensorBoard(log_dir=logs_path)])
+                          callbacks=[toolbox.EarlyStoppingByACC('acc', 0.85, patience=10),keras.callbacks.TensorBoard(log_dir=logs_path)])
     # 预测
     #构造循环迭代器，顺序不打乱的
-    train_iter = iter(dataset.get_time_batch(feature_generator,Graph=[g1,g2],cut_shape=cut_shape, time_dim=time_dim, batch_size=1,_batch_mode='random',_mode='train',flag=1))
-    test_iter = iter(dataset.get_time_batch(feature_generator,Graph=[g1,g2],cut_shape=cut_shape, time_dim=time_dim, batch_size=1,_batch_mode='random',_mode='test',flag=1))
+    train_iter = iter(dataset.get_time_batch(cut_shape=cut_shape, time_dim=time_dim, batch_size=1,_batch_mode='random',_mode='train',flag=1))
+    test_iter = iter(dataset.get_time_batch(cut_shape=cut_shape, time_dim=time_dim, batch_size=1,_batch_mode='random',_mode='test',flag=1))
 
         # for i in range(num_batches / 16):
         #     fcn.fit_generator(dataset.train.oversampling.get_time_batch(session, voxnet, cut_shape, time_dim=time_dim,
@@ -199,13 +203,23 @@ def train_GRUs(cross_epoch = 0,data_index=None,cut_shape=None,data_type=['MCIc',
                                                  y_predict=np.argmax(prediction, axis=1))
         print(test_evaluation)
 
-    #利用svm作为最后的分类器
-    print('svm evaluation:')
-    #构造数据集
+
+
     train_len = 0
     for i in data_type:
         train_len += len(data_index[i]['train'])
 
+    train_evaluation = evaluation.evaluation()
+    for i in range(test_size):
+        vosx, onehot = train_iter.__next__()
+        prediction = grus.predict_on_batch(vosx)
+        train_evaluation += evaluation.evaluation(y_true=np.argmax(onehot, axis=1),
+                                                 y_predict=np.argmax(prediction, axis=1))
+        print(test_evaluation)
+
+    # 利用svm作为最后的分类器
+    print('svm evaluation:')
+    # 构造数据集
     #BGRU特征提取模型
     BGRU_feature = keras.Model(inputs=grus.get_layer('BGRU_input').input,outputs=grus.get_layer('fc_1').output)
     train_data = -1
@@ -249,6 +263,8 @@ def train_GRUs(cross_epoch = 0,data_index=None,cut_shape=None,data_type=['MCIc',
         f_handle.write(str(svm_train)+'\n')
         f_handle.write('svm_test:\n')
         f_handle.write(str(svm_test)+'\n')
+        f_handle.write('train_evaluation\n')
+        f_handle.write(str(train_evaluation) + '\n')
         f_handle.write('test_evaluation\n')
         f_handle.write(str(test_evaluation)+'\n')
 
@@ -287,7 +303,7 @@ def train_3DCNN(cross_epoch = 0,data_index=None,brain_map=None,cut_shape=None,da
                        epochs=num_batches,
                        validation_data=dataset.get_smri_batch(cut_shape,batch_size=20,_batch_mode='random',_mode='test'),
                        validation_steps=test_size,
-                       callbacks=[toolbox.EarlyStoppingByACC('acc', 0.95, patience=10),keras.callbacks.TensorBoard(log_dir=logs_path)])
+                       callbacks=[toolbox.EarlyStoppingByACC('acc', 0.85, patience=10),keras.callbacks.TensorBoard(log_dir=logs_path)])
 
     if not os.path.exists(cfg.voxnet_checkpoint_dir):
         os.makedirs(cfg.voxnet_checkpoint_dir)

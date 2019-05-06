@@ -42,6 +42,10 @@ def get_label(model,img,label,cut_shape,true_shape):
     voxs = np.zeros([new_feature.shape[0], xyz, xyz, xyz, 1], np.float32)
     voxs[0:new_feature.shape[0], start_x:start_x + true_shape[0],
     start_y:start_y + true_shape[1], start_z:start_z + true_shape[2], 0:1] = new_feature
+    # new_feature = img
+    # new_shape = [-1,61, 73, 61, 1]
+    # new_feature = np.reshape(new_feature[0:time_dim], new_shape)
+    # voxs = new_feature
     all_predict =  model.predict_on_batch(voxs)
     # all_predict = np.argmax(all_predict,axis=1)
     # 调整形状,形状为[80,mri维度，1]

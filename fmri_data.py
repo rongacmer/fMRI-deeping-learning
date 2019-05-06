@@ -7,11 +7,6 @@ import time
 
 from config import cfg
 from voxnet import VoxNet
-# filename = 'D:/fmri/raw_AD/GretnaFunNIfTI/006_S_4153/xbcNGSdswranrest.nii'
-# img = nib.load(filename)
-# img_data = img.get_fdata()
-# img_data = np.transpose(img_data,[3,0,1,2])
-# print(img_data.shape)
 
 class fMRI_data(object):
 
@@ -80,8 +75,9 @@ class fMRI_data(object):
         #加载数据，模型:标签，文件路径
         true_shape = []  # 实际大小
         # flag = 0
-        for x in range(0, len(cut_shape), 2):
-            true_shape.append(cut_shape[x + 1] - cut_shape[x] + 1)
+        if self._model:
+            for x in range(0, len(cut_shape), 2):
+                true_shape.append(cut_shape[x + 1] - cut_shape[x] + 1)
         p=dict()
         p['train_start'] = 0
         p['test_start'] = 0
@@ -127,6 +123,7 @@ class fMRI_data(object):
                             voxs = np.zeros([new_feature.shape[0], xyz, xyz, xyz, 1], np.float32)
                             voxs[0:new_feature.shape[0], start_x:start_x + true_shape[0],
                             start_y:start_y + true_shape[1], start_z:start_z + true_shape[2], 0:1] = new_feature
+                            # voxs = np.reshape(img,[-1,61,73,61,1])
                             time_feature = model.predict_on_batch(voxs)
                             self._data[train_or_test].append((category,time_feature))
                         else:
@@ -262,6 +259,7 @@ class fMRI_data(object):
 
     def get_smri_batch(self,cut_shape,batch_size,_batch_mode=None,_mode = None):
         xyz = 32  # x,y,z大小
+        # shape = [batch_size,61,73,61,1]
         shape = [batch_size,xyz, xyz, xyz, 1]  # 输入的形状大小
         true_shape = []  # 实际大小
         # flag = 0
@@ -301,16 +299,21 @@ class fMRI_data(object):
                                       cut_shape[2]:cut_shape[3] + 1,
                                       cut_shape[4]:cut_shape[5] + 1]
                         new_shape = [true_shape[0], true_shape[1], true_shape[2], 1]
+
+                        # new_feature = img
+                        # new_shape = [61, 73, 61, 1]
                         new_feature = np.reshape(new_feature, new_shape)
                         # # 数据增强
                         # axis = np.random.choice([0, 1, 2, 3], 1)
                         # if axis[0] > 0:
                         #     new_feature = np.flip(new_feature, axis=axis[0])
+
                         start_x = (xyz - true_shape[0]) // 2
                         start_y = (xyz - true_shape[1]) // 2
                         start_z = (xyz - true_shape[2]) // 2
                         voxs[total][start_x:start_x + true_shape[0],
                         start_y:start_y + true_shape[1], start_z:start_z + true_shape[2], 0:1] = new_feature
+                        # voxs[total] = new_feature
                         one_hots[total][data[index].label] = 1
                         total += 1
                         if self._varbass:
@@ -327,7 +330,7 @@ class fMRI_data(object):
                     new_feature = img[cut_shape[0]:cut_shape[1] + 1,
                                   cut_shape[2]:cut_shape[3] + 1,
                                   cut_shape[4]:cut_shape[5] + 1]
-                    # 调整形状
+                    # # 调整形状
                     new_shape = [true_shape[0], true_shape[1], true_shape[2], 1]
                     new_feature = np.reshape(new_feature, new_shape)
                     start_x = (xyz - true_shape[0]) // 2
@@ -335,6 +338,11 @@ class fMRI_data(object):
                     start_z = (xyz - true_shape[2]) // 2
                     voxs[total][start_x:start_x + true_shape[0],
                     start_y:start_y + true_shape[1], start_z:start_z + true_shape[2], 0:1] = new_feature
+
+                    # new_feature = img
+                    # new_shape = [61, 73, 61, 1]
+                    # new_feature = np.reshape(new_feature, new_shape)
+                    # voxs[total] = new_feature
                     total = total + 1
                     one_hots[bs, data[index].label] = 1
                     if self._varbass:
@@ -409,7 +417,7 @@ class fMRI_data(object):
             yield fmri,label,data[index]._fi
 
     #fmri经过voxnet获取时间序列
-    def get_time_batch(self,model,Graph,cut_shape,time_dim=40,batch_size=None,_batch_mode=None,_mode = None,flag = 0):
+    def get_time_batch(self,cut_shape,time_dim=40,batch_size=None,_batch_mode=None,_mode = None,flag = 0):
         # voxnet模型设置
         xyz = 32
         # p = dict()
@@ -471,7 +479,7 @@ class fMRI_data(object):
                         new_feature = data[index]._fi
                         new_feature = new_feature[0:min(time_dim,new_feature.shape[0])]
                         start_t = (time_dim - new_feature.shape[0]) // 2
-                        time_serial[total][start_t:start_t+new_feature.shape[0]]=time_feature
+                        time_serial[total][start_t:start_t+new_feature.shape[0]]=new_feature
                         one_hots[total, data[index].label] = 1
                         total = total + 1
                         if self._varbass:
@@ -485,32 +493,34 @@ class fMRI_data(object):
                     # print(index)
                     # print('\n',_batch_mode,_mode)
                     # 加载图片
-                    img = np.load(data[index]._fi)
-                    # img = img.get_fdata()
-                    # img = np.transpose(img, [3, 0, 1, 2])
-                    if self._varbass:
-                        print(img.shape)
-                    new_feature = img[0:min(time_dim, img.shape[0]), cut_shape[0]:cut_shape[1] + 1,
-                                  cut_shape[2]:cut_shape[3] + 1,
-                                  cut_shape[4]:cut_shape[5] + 1]
-                    # 调整形状
-                    new_shape = [new_feature.shape[0], true_shape[0], true_shape[1], true_shape[2], 1]
-                    new_feature = np.reshape(new_feature, new_shape)
-                    #计算图像的坐标开始位置
-                    start_t = (time_dim - new_feature.shape[0]) // 2
-                    start_x = (xyz - true_shape[0]) // 2
-                    start_y = (xyz - true_shape[1]) // 2
-                    start_z = (xyz - true_shape[2]) // 2
-                    voxs = np.zeros([new_feature.shape[0], xyz, xyz, xyz,1], np.float32)
-                    voxs[0:new_feature.shape[0], start_x:start_x + true_shape[0],
-                    start_y:start_y + true_shape[1], start_z:start_z + true_shape[2], 0:1] = new_feature
+                    # img = np.load(data[index]._fi)
+                    # # img = img.get_fdata()
+                    # # img = np.transpose(img, [3, 0, 1, 2])
+                    # if self._varbass:
+                    #     print(img.shape)
+                    # new_feature = img[0:min(time_dim, img.shape[0]), cut_shape[0]:cut_shape[1] + 1,
+                    #               cut_shape[2]:cut_shape[3] + 1,
+                    #               cut_shape[4]:cut_shape[5] + 1]
+                    # # 调整形状
+                    # new_shape = [new_feature.shape[0], true_shape[0], true_shape[1], true_shape[2], 1]
+                    # new_feature = np.reshape(new_feature, new_shape)
+                    # #计算图像的坐标开始位置
+                    # start_t = (time_dim - new_feature.shape[0]) // 2
+                    # start_x = (xyz - true_shape[0]) // 2
+                    # start_y = (xyz - true_shape[1]) // 2
+                    # start_z = (xyz - true_shape[2]) // 2
+                    # voxs = np.zeros([new_feature.shape[0], xyz, xyz, xyz,1], np.float32)
+                    # voxs[0:new_feature.shape[0], start_x:start_x + true_shape[0],
+                    # start_y:start_y + true_shape[1], start_z:start_z + true_shape[2], 0:1] = new_feature
                     # 调整形状,形状为[80,mri维度，1]
                     # new_shape = [min(time_dim, img.shape[0]), shape[1], shape[2], shape[3], 1]
                     # new_feature = np.reshape(new_feature, new_shape)
                     # time_feature = sess.run(p['output'], feed_dict={voxnet[0]: voxs,voxnet.keep_prob:1.0,voxnet.training:False})
                     # with Graph[0].as_default():
-                    time_feature = model.predict_on_batch(voxs)
-                    time_serial[total][start_t:start_t + new_feature.shape[0]] = time_feature
+                    new_feature = data[index]._fi
+                    new_feature = new_feature[0:min(time_dim, new_feature.shape[0])]
+                    start_t = (time_dim - new_feature.shape[0]) // 2
+                    time_serial[total][start_t:start_t + new_feature.shape[0]] = new_feature
                     one_hots[total, data[index].label] = 1
                     total = total + 1
                     if self._varbass:
