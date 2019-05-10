@@ -60,6 +60,39 @@ def CNN_3D(input_shape=[32,32,32,1],nb_class = 2):
                   optimizer='adam', metrics=['accuracy'])
     return model
 
+def Autoencoder(input_shape=[32,32,32,1],dim=100):
+    #编码器
+    input = Input(shape=input_shape)
+    enc = Conv3D(8,3,padding='same',activation='relu')(input)
+    enc = MaxPool3D()(enc)
+    enc = Conv3D(8, 3, padding='same', activation='relu')(enc)
+    enc = MaxPool3D()(enc)
+    enc = Conv3D(8, 3, padding='same', activation='relu')(enc)
+    enc = MaxPool3D()(enc)
+    shape_1 = enc.shape
+    enc = Flatten()(enc)
+    shape_2 = enc._keras_shape
+    enc = Dense(dim,name='feature')(enc)
+    print(shape_1[1:],shape_2)
+    shape_3 = []
+    for i in shape_1[1:]:
+        shape_3.append(int(i))
+    #译码器
+    dec = Dense(dim)(enc)
+    dec = Dense(512)(dec)
+    dec = Reshape(target_shape=(4,4,4,8))(dec)
+    dec = UpSampling3D()(dec)
+    dec = Conv3D(8,3,padding='same',activation='relu')(dec)
+    dec = UpSampling3D()(dec)
+    dec = Conv3D(8, 3, padding='same', activation='relu')(dec)
+    dec = UpSampling3D()(dec)
+    dec = Conv3D(1, 3, padding='same', activation='tanh')(dec)
+    dec = Flatten()(dec)
+    model = keras.Model(inputs=input,outputs=dec)
+    model.summary()
+    model.compile(loss=toolbox.mean_squared_error, optimizer='adam')
+    return model
+# Autoencoder()
 # CNN_3D()
 def GRUs(input_shape=[80,100],nb_class = 2):
 
@@ -88,12 +121,12 @@ def GRUs(input_shape=[80,100],nb_class = 2):
     left = GRU(units=80,return_sequences=True,kernel_initializer=keras.initializers.glorot_uniform(seed=None))(b)
     # left = Dropout(0.2,name='BGRU_Dropout_1')(left)
     left = GRU(units=50,return_sequences=True,kernel_initializer=keras.initializers.glorot_uniform(seed=None))(left)
-    left = Dropout(0.7,name='BGRU_Dropout_2')(left)
+    left = Dropout(0.5,name='BGRU_Dropout_2')(left)
     left = GRU(units=25,return_sequences=False,kernel_initializer=keras.initializers.glorot_uniform(seed=None))(left)
     right = GRU(units=80, return_sequences=True,go_backwards=True,kernel_initializer=keras.initializers.glorot_uniform(seed=None),kernel_regularizer=keras.regularizers.l2(0.01))(b)
     # right = Dropout(0.2,name='BGRU_Dropout_3')(right)
     right = GRU(units=50, return_sequences=True,kernel_initializer=keras.initializers.glorot_uniform(seed=None))(right)
-    right = Dropout(0.7,name='BGRU_Dropout_4')(right)
+    right = Dropout(0.5,name='BGRU_Dropout_4')(right)
     right = GRU(units=25, return_sequences=False,kernel_initializer=keras.initializers.glorot_uniform(seed=None))(right)
     fc = concatenate([left,right],axis=-1,name='fc_1')
     fc = Activation('relu')(fc)
@@ -106,7 +139,7 @@ def GRUs(input_shape=[80,100],nb_class = 2):
     model.compile(loss='binary_crossentropy', optimizer='adam',
                   metrics=['accuracy'])
     return model
-GRUs()
+# GRUs()
 def train_fcn(cross_epoch = 0,data_index=None,cut_shape=None,data_type=['MCIc','MCInc'],pre_dir='/home/anzeng/rhb/fmri_data',
          num_batches = 256*5,voxnet_point=None,test_size = 6,brain_map=[217]):
     tf.reset_default_graph()
@@ -143,7 +176,7 @@ def train_fcn(cross_epoch = 0,data_index=None,cut_shape=None,data_type=['MCIc','
 
 def train_GRUs(cross_epoch = 0,data_index=None,cut_shape=None,data_type=['MCIc','MCInc'],pre_dir='/home/anzeng/rhb/fmri_data',
          num_batches = 256*5,voxnet_point=None,test_size = 6,brain_map=[217],f_handle=None):
-    #清楚keras后台数据
+    #清除keras后台数据
     keras.backend.clear_session()
     # #####超参##########
     time_dim = 80
@@ -157,12 +190,14 @@ def train_GRUs(cross_epoch = 0,data_index=None,cut_shape=None,data_type=['MCIc',
     # input_shape = [xyz, xyz, xyz, 1]
     # inputs = keras.layers.Input(input_shape)
 
-    _3D_CNN = keras.models.load_model(voxnet_point)
+    # _3D_CNN = keras.models.load_model(voxnet_point)
+    auto = keras.models.load_model(voxnet_point)
     # _3D_CNN.predict(np.zeros([1,32,32,32,1]),1)
     # for i in _3D_CNN.layers:
     #     print(i.name)
-    layer_name = 'CNN_fc2'
-    feature_generator = keras.Model(inputs=_3D_CNN.layers[0].input, outputs=_3D_CNN.get_layer(layer_name).output)
+    layer_name = 'feature'
+    feature_generator = keras.Model(inputs=auto.layers[0].input, outputs=auto.get_layer(layer_name).output)
+    # feature_generator = keras.Model(inputs=_3D_CNN.layers[0].input, outputs=_3D_CNN.get_layer(layer_name).output)
     # sample = np.zeros([1, xyz, xyz, xyz, 1])
     # y = feature_generator.predict_on_batch(sample)
     # print(y)
@@ -184,7 +219,7 @@ def train_GRUs(cross_epoch = 0,data_index=None,cut_shape=None,data_type=['MCIc',
                           epochs=num_batches,
                           validation_data=dataset.get_time_batch(cut_shape= cut_shape, time_dim=time_dim, batch_size=1,_batch_mode='random',_mode='test',flag=1),
                           validation_steps=test_size,
-                          callbacks=[toolbox.EarlyStoppingByACC('acc', 0.85, patience=10),keras.callbacks.TensorBoard(log_dir=logs_path)])
+                          callbacks=[toolbox.EarlyStoppingByACC('acc', 0.90, patience=10),keras.callbacks.TensorBoard(log_dir=logs_path)])
     # 预测
     #构造循环迭代器，顺序不打乱的
     train_iter = iter(dataset.get_time_batch(cut_shape=cut_shape, time_dim=time_dim, batch_size=1,_batch_mode='random',_mode='train',flag=1))
@@ -209,62 +244,62 @@ def train_GRUs(cross_epoch = 0,data_index=None,cut_shape=None,data_type=['MCIc',
     for i in data_type:
         train_len += len(data_index[i]['train'])
 
-    train_evaluation = evaluation.evaluation()
-    for i in range(test_size):
-        vosx, onehot = train_iter.__next__()
-        prediction = grus.predict_on_batch(vosx)
-        train_evaluation += evaluation.evaluation(y_true=np.argmax(onehot, axis=1),
-                                                 y_predict=np.argmax(prediction, axis=1))
-        print(test_evaluation)
+    # train_evaluation = evaluation.evaluation()
+    # for i in range(train_len):
+    #     vosx, onehot = train_iter.__next__()
+    #     prediction = grus.predict_on_batch(vosx)
+    #     train_evaluation += evaluation.evaluation(y_true=np.argmax(onehot, axis=1),
+    #                                              y_predict=np.argmax(prediction, axis=1))
+    #     print(train_evaluation)
 
     # 利用svm作为最后的分类器
-    print('svm evaluation:')
-    # 构造数据集
-    #BGRU特征提取模型
-    BGRU_feature = keras.Model(inputs=grus.get_layer('BGRU_input').input,outputs=grus.get_layer('fc_1').output)
-    train_data = -1
-    train_label = -1
-    for i in range(train_len):
-        vosx,onehot = train_iter.__next__()
-        feature = BGRU_feature.predict_on_batch(vosx)
-        y_true = np.argmax(onehot,axis=1)
-        if isinstance(train_data,int):
-            train_data = feature
-            train_label = y_true
-        else:
-            train_data = np.vstack((train_data,feature))
-            train_label = np.hstack((train_label,y_true))
-    clf = svm.SVC(C=1.0,kernel='rbf',gamma='auto')
-    clf.fit(train_data,train_label)
-    predict = clf.predict(train_data)
-    svm_train = evaluation.evaluation(y_true=train_label,y_predict=predict)
-    print('svm_train:')
-    print(svm_train)
-
-    test_data = -1
-    test_label = -1
-    for i in range(test_size):
-        vosx,onehot = test_iter.__next__()
-        feature = BGRU_feature.predict_on_batch(vosx)
-        y_true = np.argmax(onehot,axis=1)
-        if isinstance(test_data,int):
-            test_data = feature
-            test_label = y_true
-        else:
-            test_data = np.vstack((test_data,feature))
-            test_label = np.hstack((test_label,y_true))
-    predict = clf.predict(test_data)
-    svm_test = evaluation.evaluation(y_true=test_label, y_predict=predict)
-    print('svm_test:')
-    print(svm_test)
+    # print('svm evaluation:')
+    # # 构造数据集
+    # #BGRU特征提取模型
+    # BGRU_feature = keras.Model(inputs=grus.get_layer('BGRU_input').input,outputs=grus.get_layer('fc_1').output)
+    # train_data = -1
+    # train_label = -1
+    # for i in range(train_len):
+    #     vosx,onehot = train_iter.__next__()
+    #     feature = BGRU_feature.predict_on_batch(vosx)
+    #     y_true = np.argmax(onehot,axis=1)
+    #     if isinstance(train_data,int):
+    #         train_data = feature
+    #         train_label = y_true
+    #     else:
+    #         train_data = np.vstack((train_data,feature))
+    #         train_label = np.hstack((train_label,y_true))
+    # clf = svm.SVC(C=1.0,kernel='rbf',gamma='auto')
+    # clf.fit(train_data,train_label)
+    # predict = clf.predict(train_data)
+    # svm_train = evaluation.evaluation(y_true=train_label,y_predict=predict)
+    # print('svm_train:')
+    # print(svm_train)
+    #
+    # test_data = -1
+    # test_label = -1
+    # for i in range(test_size):
+    #     vosx,onehot = test_iter.__next__()
+    #     feature = BGRU_feature.predict_on_batch(vosx)
+    #     y_true = np.argmax(onehot,axis=1)
+    #     if isinstance(test_data,int):
+    #         test_data = feature
+    #         test_label = y_true
+    #     else:
+    #         test_data = np.vstack((test_data,feature))
+    #         test_label = np.hstack((test_label,y_true))
+    # predict = clf.predict(test_data)
+    # svm_test = evaluation.evaluation(y_true=test_label, y_predict=predict)
+    # print('svm_test:')
+    # print(svm_test)
 
     if f_handle:
-        f_handle.write('svm_train:\n')
-        f_handle.write(str(svm_train)+'\n')
-        f_handle.write('svm_test:\n')
-        f_handle.write(str(svm_test)+'\n')
-        f_handle.write('train_evaluation\n')
-        f_handle.write(str(train_evaluation) + '\n')
+        # f_handle.write('svm_train:\n')
+        # f_handle.write(str(svm_train)+'\n')
+        # f_handle.write('svm_test:\n')
+        # f_handle.write(str(svm_test)+'\n')
+        # f_handle.write('train_evaluation\n')
+        # f_handle.write(str(train_evaluation) + '\n')
         f_handle.write('test_evaluation\n')
         f_handle.write(str(test_evaluation)+'\n')
 
@@ -273,7 +308,7 @@ def train_GRUs(cross_epoch = 0,data_index=None,cut_shape=None,data_type=['MCIc',
         filepath = os.path.join(cfg.fcn_checkpoint_dir, 'train_' + str(cross_epoch)+'.h5')
         grus.save(filepath=filepath)
 
-    return test_evaluation,svm_test
+    return test_evaluation,evaluation.evaluation()
     # return evaluation.evaluation()
 
 
@@ -308,6 +343,44 @@ def train_3DCNN(cross_epoch = 0,data_index=None,brain_map=None,cut_shape=None,da
     if not os.path.exists(cfg.voxnet_checkpoint_dir):
         os.makedirs(cfg.voxnet_checkpoint_dir)
     filepath = os.path.join(cfg.voxnet_checkpoint_dir, 'train_' + str(cross_epoch) + '.h5')
+    model.save(filepath=filepath)
+    # del model
+    # model = keras.models.load_model(filepath)
+    return filepath
+
+def train_autoencoder(cross_epoch = 0,data_index=None,brain_map=None,cut_shape=None,data_type=['MCIc','MCInc'],pre_dir='/home/anzeng/rhb/fmri_data', num_batches = 512*5+1,test_size=6):
+    keras.backend.clear_session()
+    batch_size = 100
+    if cut_shape == None:
+        brain_map = [212,213,214,215,216,217,218]
+        cut_shape = [100,0,100,0,100,0]
+        mask = nib.load('/home/anzeng/rhb/fmri/fMRI-deeping-learning/BN_Atlas_246_3mm.nii')
+        mask = mask.get_fdata()
+        #获取截取的sMRI大小
+        for x in brain_map:
+            tmp = np.where(mask==x)
+            for i in range(3):
+                cut_shape[2*i] = min(cut_shape[2*i],np.min(tmp[i]))
+                cut_shape[2 * i + 1] = max(cut_shape[2 * i+1], np.max(tmp[i]))
+        print(cut_shape)
+    # xyz = 32
+    logs_path = os.path.join(cfg.voxnet_checkpoint_dir,'train_'+str(cross_epoch))
+    if os.path.isdir(logs_path):
+        shutil.rmtree(logs_path)
+    os.makedirs(logs_path)
+    model = Autoencoder()
+    dataset = fMRI_data(data_type, data_index=data_index,dir=pre_dir, batch_mode='random', varbass=cfg.varbass)
+    model.fit_generator(dataset.get_smri_batch(cut_shape,batch_size,_batch_mode='oversampling',_mode='train'), steps_per_epoch=8,
+                       epochs=num_batches,
+                       callbacks=[keras.callbacks.TensorBoard(log_dir=logs_path)])
+
+    if not os.path.exists(cfg.voxnet_checkpoint_dir):
+        os.makedirs(cfg.voxnet_checkpoint_dir)
+    filepath = os.path.join(cfg.voxnet_checkpoint_dir, 'train_' + str(cross_epoch) + '.h5')
+    # for i in range(10):
+    #     test_model = keras.Model(inputs=model.layers[0].input,outputs = model.layers[i].output)
+    #     test_model.save(filepath=filepath)
+    #     print(i)
     model.save(filepath=filepath)
     # del model
     # model = keras.models.load_model(filepath)

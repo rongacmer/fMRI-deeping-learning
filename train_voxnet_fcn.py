@@ -203,17 +203,36 @@ def train(_):
             cut_shape[2 * i] = min(cut_shape[2 * i], np.min(tmp[i]))
             cut_shape[2 * i + 1] = max(cut_shape[2 * i + 1], np.max(tmp[i]))
     print(cut_shape)
+
+
+
     #样本划分
     data_type=['AD','NC']
     test_len=[10,10]
     dir = '/home/anzeng/rhb/fmri_data/new_fmri'
     target_sMRI_dir = '/home/anzeng/rhb/generate_sMRI'
     iters={} #迭代器，用于留一测试
-    epoch = 5
+    sample={} #样本号
+    epoch = 10
+
+    for i in data_type:
+        sample_dir = '/home/anzeng/rhb/fmri_data/{}_sample.txt'.format(i)
+        f_sample = open(sample_dir, 'r')
+        lists = f_sample.readline()
+        lists = lists[1:-1]
+        lists = lists.split(', ')
+        lists = list(map(lambda x: x[1:13], lists))
+        sample[i] = lists
+        # for j in lists:
+        #     if 'sub-OAS30086' in j or 'sub-OAS30436' in j:
+        #         print(j)
+    print(sample)
     #构造迭代器
     for cnt,i in enumerate(data_type):
-        path = os.path.join(dir,i)
-        data_len = len(os.listdir(path))
+        # path = os.path.join(dir,i)
+        # data_len = len(os.listdir(path))
+        data_len = len(sample[i])
+        # print(data_len)
         iters[i]=iter(toolbox.cut_data(data_len,test_len[cnt]))
 
     BGRU_ACC = evaluation() #模型
@@ -221,6 +240,21 @@ def train(_):
     ensemble_ACC = evaluation() #集成模型
     ensemble_SVM_ACC= evaluation() #SVM集成模型
     f = open(cfg.output,'w')
+
+    #训练一个自编码器
+    print('start autoencoder')
+    start_time = time.time()
+    smri_data = {}
+    for d_type in data_type:
+        # raw_dir = os.path.join(dir,d_type)
+        class_sMRI_dir = os.path.join(target_sMRI_dir, d_type)
+        smri_data[d_type] = {'train': range(len(os.listdir(class_sMRI_dir))), 'test': range(len(os.listdir(class_sMRI_dir)))}
+    voxnet_filename = keras_model.train_autoencoder(cross_epoch=0, brain_map=brain_map, cut_shape=cut_shape,
+                                                    data_type=data_type, data_index=smri_data, pre_dir=target_sMRI_dir,
+                                                    num_batches=2000,
+                                                    test_size=10)
+    end_time = time.time()
+    print('finish autoencoder:{}'.format((end_time-start_time)/60))
 
     for step in range(epoch):
         # 数据迭代器
@@ -238,47 +272,82 @@ def train(_):
         # 把fmri分过为sMRI
         print('start separate')
         start_time = time.time()
+        smri_data = {}
+        p_list = {}
         for d_type in data_type:
-            raw_dir = os.path.join(dir,d_type)
+            # raw_dir = os.path.join(dir,d_type)
             class_sMRI_dir = os.path.join(target_sMRI_dir,d_type)
-            if os.path.isdir(class_sMRI_dir):
-                shutil.rmtree(class_sMRI_dir)
-            os.makedirs(class_sMRI_dir)
-            # train_list = voxnet_data[d_type]['train']
-            # test_list = np.hstack((voxnet_data[d_type]['test'] ,fcn_data[d_type]['train']))
-            # for remove in test_list:
-            #     if remove in train_list:
-            #         np.delete(test_list,remove)
-            # train_list = fcn_data[d_type]['train']
-            # test_list = fcn_data[d_type]['test']
-            train_list = voxnet_data[d_type]['train']
-            test_list = list((set(fcn_data[d_type]['train']) - set(voxnet_data[d_type]['train']))| set(fcn_data[d_type]['test']))
-            print(train_list)
-            print(test_list)
-            convert.covert2smri(raw_dir,class_sMRI_dir,train_list,test_list,brain_map,mask)
+            # if os.path.isdir(class_sMRI_dir):
+            #     shutil.rmtree(class_sMRI_dir)
+            # os.makedirs(class_sMRI_dir)
+            # # train_list = voxnet_data[d_type]['train']
+            # # test_list = np.hstack((voxnet_data[d_type]['test'] ,fcn_data[d_type]['train']))
+            # # for remove in test_list:
+            # #     if remove in train_list:
+            # #         np.delete(test_list,remove)
+            # # train_list = fcn_data[d_type]['train']
+            # # test_list = fcn_data[d_type]['test']
+            p_list['smri_train'] = []
+            p_list['smri_test'] = []
+            p_list['train'] = voxnet_data[d_type]['train']
+            p_list['train'] = list(map(lambda x:sample[d_type][x],p_list['train']))
+            p_list['test'] = list((set(fcn_data[d_type]['train']) - set(voxnet_data[d_type]['train']))| set(fcn_data[d_type]['test']))
+            p_list['test'] = list(map(lambda x: sample[d_type][x], p_list['test']))
+            #构造训练集、测试及集
+            for cnt,per in enumerate(os.listdir(class_sMRI_dir)):
+                if per[0:12] in p_list['train']:
+                    p_list['smri_train'].append(cnt)
+                else:
+                    p_list['smri_test'].append(cnt)
+            smri_data[d_type] = {'train':p_list['smri_train'],'test':p_list['smri_test']}
+            # print(train_list)
+            # print(test_list)
+            # convert.covert2smri(raw_dir,class_sMRI_dir,train_list,test_list,brain_map,mask)
+            class_sMRI_dir = os.path.join(dir,d_type)
             print(d_type+' convert success')
         end_time = time.time()
         print('separate success total time:%f'%((end_time-start_time)/60))
+
+        #时间集合
+        time_data = {}
+        for i in data_type:
+            train_name = list(map(lambda x:sample[i][x],fcn_data[i]['train']))
+            # print(train_name)
+            test_name = list(map(lambda x:sample[i][x],fcn_data[i]['test']))
+            train_list = []
+            test_list = []
+            data_dir = os.path.join(dir,i)
+            for cnt,l in enumerate(os.listdir(data_dir)):
+                # print(cnt,l)
+                if l[0:12] not in train_name and l[0:12] not in test_name:
+                    print(l)
+                if l[0:12] in train_name:
+                    train_list.append(cnt)
+                else:
+                    test_list.append(cnt)
+            time_data[i]={'train':train_list,'test':test_list}
+        # print(time_data)
+        #############
         # voxnent训练
-        print('voxnet train start')
+        # print('voxnet train start')
         # voxnet_filename = train_cut.main(cross_epoch=step,brain_map=brain_map,cut_shape=cut_shape,data_type=data_type,pre_dir = target_sMRI_dir,num_batches= 1024 * 5 + 1,test_size=10)
-        voxnet_filename = keras_model.train_3DCNN(cross_epoch=step, brain_map=brain_map, cut_shape=cut_shape,
-                                         data_type=data_type, pre_dir=target_sMRI_dir, num_batches=1024*5,
-                                         test_size=10)
+        # voxnet_filename = keras_model.train_autoencoder(cross_epoch=step, brain_map=brain_map, cut_shape=cut_shape,
+        #                                  data_type=data_type, data_index=smri_data,pre_dir=target_sMRI_dir, num_batches=1000,
+        #                                  test_size=10)
         print(voxnet_filename)
-        print('voxnent train finish')
+        # print('voxnent train finish')
         # voxnet_filename = '/home/anzeng/rhb/fmri/ADvsNC_voxnent_checkpoint_4_15/cx-0.npz'
         # fcn训练
         print('fcn train start')
         # one_accuracy = smri_ensemble.emsemble(cross_epoch=step,brain_map=brain_map,data_type=data_type,data_index = fcn_data,cut_shape=cut_shape,pre_dir=dir,num_batches=128*5+1,voxnet_point=voxnet_filename,test_size=20,f_handle=f)
-        BGRU_ACC_One,BGRU_SVM_ACC_One = keras_model.train_GRUs(cross_epoch=step,brain_map=brain_map,data_type=data_type,data_index = fcn_data,cut_shape=cut_shape,pre_dir=dir,num_batches=128*5,voxnet_point=voxnet_filename,test_size=20,f_handle=f)
+        BGRU_ACC_One,BGRU_SVM_ACC_One = keras_model.train_GRUs(cross_epoch=step,brain_map=brain_map,data_type=data_type,data_index = time_data,cut_shape=cut_shape,pre_dir=dir,num_batches=128*5,voxnet_point=voxnet_filename,test_size=20,f_handle=f)
         BGRU_ACC += BGRU_ACC_One
         # print('BGRU_SVM_ACC')
         BGRU_SVM_ACC += BGRU_SVM_ACC_One
-        print('ensemble_SVM_ACC')
-        ensemble_SVM_ACC += smri_ensemble.svm_emsemble(cross_epoch=step,brain_map=brain_map,data_type=data_type,data_index = fcn_data,cut_shape=cut_shape,pre_dir=dir,num_batches=128*5+1,voxnet_point=voxnet_filename,test_size=20,f_handle=f)
-        print('ensemble_ACC')
-        ensemble_ACC += smri_ensemble.emsemble(cross_epoch=step,brain_map=brain_map,data_type=data_type,data_index = fcn_data,cut_shape=cut_shape,pre_dir=dir,num_batches=128*5+1,voxnet_point=voxnet_filename,test_size=20,f_handle=f)
+        # print('ensemble_SVM_ACC')
+        # ensemble_SVM_ACC += smri_ensemble.svm_emsemble(cross_epoch=step,brain_map=brain_map,data_type=data_type,data_index = fcn_data,cut_shape=cut_shape,pre_dir=dir,num_batches=128*5+1,voxnet_point=voxnet_filename,test_size=20,f_handle=f)
+        # print('ensemble_ACC')
+        # ensemble_ACC += smri_ensemble.emsemble(cross_epoch=step,brain_map=brain_map,data_type=data_type,data_index = fcn_data,cut_shape=cut_shape,pre_dir=dir,num_batches=128*5+1,voxnet_point=voxnet_filename,test_size=20,f_handle=f)
         # accuracy += train_fcn.main(brain_map=brain_map, data_type = data_type,data_index=fcn_data, cut_shape=cut_shape, pre_dir=dir,
         #                            num_batches=128 * 5 + 1, voxnet_point=voxnet_filename, test_size=20)
         # train_fcn.main(brain_map=brain_map,cut_shape=cut_shape,pre_dir=dir,data_type=data_type,num_batches=256*5+1,voxnet_point=voxnet_filename,test_size=20)

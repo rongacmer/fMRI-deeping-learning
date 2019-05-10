@@ -348,7 +348,7 @@ class fMRI_data(object):
                     if self._varbass:
                         print(total)
             # print(one_hots)
-            yield voxs, one_hots
+            yield voxs, np.reshape(voxs,[-1,xyz**3])
 
 
     def get_batch(self, batch_size=None):
